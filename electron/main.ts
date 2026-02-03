@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import Store from 'electron-store'
+import { registerPlaywrightIpcHandlers, unregisterPlaywrightIpcHandlers } from '../electron-extras/playwright-ipc'
+import { registerBrowserIpcHandlers, unregisterBrowserIpcHandlers } from '../electron-extras/ipc-handlers'
 
 const store = new Store()
 
@@ -22,6 +24,10 @@ function createWindow() {
     show: false,
   })
 
+  // Register browser automation IPC handlers
+  registerBrowserIpcHandlers(mainWindow)
+  registerPlaywrightIpcHandlers(mainWindow)
+
   // Show window when ready to prevent white flash
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -36,6 +42,9 @@ function createWindow() {
   }
 
   mainWindow.on('closed', () => {
+    // Cleanup IPC handlers
+    unregisterBrowserIpcHandlers()
+    unregisterPlaywrightIpcHandlers()
     mainWindow = null
   })
 }

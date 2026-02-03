@@ -1,5 +1,6 @@
 export { DashboardPanel } from './DashboardPanel';
 export { LinkedInPanel } from './LinkedInPanel';
+export { TwitterPanel } from './TwitterPanel';
 export { default as ContactsPanel } from './ContactsPanel';
 export { MeetingsPanel } from './MeetingsPanel';
 export { SettingsPanel } from './SettingsPanel';

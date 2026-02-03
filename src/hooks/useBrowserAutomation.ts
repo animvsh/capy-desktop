@@ -1,18 +1,23 @@
 /**
- * Browser Automation Hook
+ * useBrowserAutomation Hook
  * 
- * Provides React-friendly interface to Playwright browser automation.
- * Manages:
- * - Browser initialization
- * - Profile management
- * - LinkedIn/Twitter automation commands
- * - Live view state
+ * Provides React interface to Playwright-based browser automation.
+ * Features:
+ * - Profile management (LinkedIn/Twitter/Generic)
+ * - Live view streaming
+ * - LinkedIn automation (connect, message, extract)
+ * - Twitter automation (follow, DM)
+ * - Human-in-the-loop approval
+ * - Natural language command processing
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-// Types (mirror electron preload types)
-interface BrowserProfile {
+// ============================================
+// TYPES
+// ============================================
+
+export interface BrowserProfile {
   id: string;
   name: string;
   platform: 'linkedin' | 'twitter' | 'generic';
@@ -21,374 +26,745 @@ interface BrowserProfile {
   lastUsed: number;
 }
 
-interface AutomationStep {
+export interface AutomationStep {
   id: string;
   name: string;
   status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+  description?: string;
   requiresApproval?: boolean;
 }
 
-interface AutomationRun {
+export interface AutomationRun {
   id: string;
-  type: string;
-  status: string;
+  type: 'linkedin_connect' | 'linkedin_message' | 'twitter_follow' | 'twitter_dm';
+  status: 'idle' | 'running' | 'paused' | 'complete' | 'stopped' | 'failed';
   steps: AutomationStep[];
   currentStepIndex: number;
-  target?: { name: string; headline?: string; profileUrl: string };
+  target?: LinkedInProfile;
   message?: string;
   error?: string;
   startTime?: number;
   endTime?: number;
 }
 
-interface LinkedInProfile {
+export interface LinkedInProfile {
   name: string;
   headline?: string;
   company?: string;
   location?: string;
   connectionDegree?: string;
   profileUrl: string;
+  avatarUrl?: string;
 }
 
-interface UseBrowserAutomationReturn {
-  // State
-  isInitialized: boolean;
-  isLoading: boolean;
-  error: string | null;
-  profiles: BrowserProfile[];
-  activeProfileId: string | null;
-  currentRun: AutomationRun | null;
-  isLoggedIn: boolean;
+export interface AutomationEvent {
+  type: string;
+  timestamp: number;
+  data: Record<string, any>;
+}
 
-  // Lifecycle
-  initialize: () => Promise<void>;
-  shutdown: () => Promise<void>;
+export interface BrowserState {
+  url: string;
+  title: string;
+}
 
-  // Profile management
-  selectProfile: (platform: 'linkedin' | 'twitter') => Promise<BrowserProfile>;
+export interface ApprovalRequest {
+  runId: string;
+  action: string;
+  preview: {
+    target: string;
+    content: string;
+  };
+}
+
+// ============================================
+// NATURAL LANGUAGE COMMAND DETECTION
+// ============================================
+
+export interface DetectedBrowserCommand {
+  type: 'linkedin_connect' | 'linkedin_message' | 'twitter_follow' | 'twitter_dm' | 'navigate' | 'unknown';
+  platform: 'linkedin' | 'twitter' | 'generic';
+  target?: string; // username, URL, or name
+  message?: string;
+  confidence: number;
+}
+
+export function detectBrowserCommand(input: string): DetectedBrowserCommand | null {
+  const lower = input.toLowerCase();
   
-  // Login checks
-  checkLinkedInLogin: () => Promise<boolean>;
-  checkTwitterLogin: () => Promise<boolean>;
-  openLoginPage: (platform: 'linkedin' | 'twitter') => Promise<void>;
-
-  // LinkedIn automation
-  linkedinConnect: (targetUrl: string, note?: string) => Promise<void>;
-  linkedinMessage: (targetUrl: string, message: string) => Promise<void>;
-  linkedinExtractProfile: () => Promise<LinkedInProfile | null>;
-
-  // Twitter automation
-  twitterFollow: (username: string) => Promise<void>;
-  twitterDM: (username: string, message: string) => Promise<void>;
-
-  // Run control
-  stopRun: () => Promise<void>;
-  approveAction: () => Promise<void>;
-  rejectAction: () => Promise<void>;
+  // LinkedIn connection patterns
+  const linkedinConnectPatterns = [
+    /connect\s+(?:with\s+)?(.+?)(?:\s+on\s+linkedin)?$/i,
+    /send\s+(?:a\s+)?connection\s+(?:request\s+)?to\s+(.+)/i,
+    /linkedin\s+connect\s+(?:with\s+)?(.+)/i,
+    /add\s+(.+?)(?:\s+on\s+linkedin)/i,
+  ];
+  
+  for (const pattern of linkedinConnectPatterns) {
+    const match = input.match(pattern);
+    if (match && (lower.includes('linkedin') || lower.includes('connect'))) {
+      return {
+        type: 'linkedin_connect',
+        platform: 'linkedin',
+        target: match[1].trim(),
+        confidence: 0.9,
+      };
+    }
+  }
+  
+  // LinkedIn message patterns
+  const linkedinMessagePatterns = [
+    /message\s+(.+?)\s+(?:on\s+linkedin\s+)?(?:saying|with|:)\s*["""]?(.+)["""]?/i,
+    /send\s+(?:a\s+)?message\s+to\s+(.+?)\s+(?:on\s+linkedin\s+)?(?:saying|:)\s*["""]?(.+)["""]?/i,
+    /dm\s+(.+?)\s+on\s+linkedin\s*["""]?(.+)?["""]?/i,
+  ];
+  
+  for (const pattern of linkedinMessagePatterns) {
+    const match = input.match(pattern);
+    if (match && lower.includes('linkedin')) {
+      return {
+        type: 'linkedin_message',
+        platform: 'linkedin',
+        target: match[1].trim(),
+        message: match[2]?.trim(),
+        confidence: 0.85,
+      };
+    }
+  }
+  
+  // Twitter follow patterns
+  const twitterFollowPatterns = [
+    /follow\s+@?(.+?)(?:\s+on\s+twitter|\s+on\s+x)?$/i,
+    /twitter\s+follow\s+@?(.+)/i,
+  ];
+  
+  for (const pattern of twitterFollowPatterns) {
+    const match = input.match(pattern);
+    if (match && (lower.includes('twitter') || lower.includes('follow') || lower.includes(' x '))) {
+      return {
+        type: 'twitter_follow',
+        platform: 'twitter',
+        target: match[1].trim().replace('@', ''),
+        confidence: 0.85,
+      };
+    }
+  }
+  
+  // Twitter DM patterns
+  const twitterDMPatterns = [
+    /dm\s+@?(.+?)\s+(?:on\s+twitter\s+)?(?:saying|with|:)\s*["""]?(.+)["""]?/i,
+    /send\s+(?:a\s+)?dm\s+to\s+@?(.+?)\s+(?:on\s+twitter\s+)?(?:saying|:)\s*["""]?(.+)["""]?/i,
+    /message\s+@?(.+?)\s+on\s+twitter\s*["""]?(.+)?["""]?/i,
+  ];
+  
+  for (const pattern of twitterDMPatterns) {
+    const match = input.match(pattern);
+    if (match && (lower.includes('twitter') || lower.includes('dm') || lower.includes(' x '))) {
+      return {
+        type: 'twitter_dm',
+        platform: 'twitter',
+        target: match[1].trim().replace('@', ''),
+        message: match[2]?.trim(),
+        confidence: 0.85,
+      };
+    }
+  }
+  
+  // Generic navigation
+  const navigatePatterns = [
+    /(?:go\s+to|open|navigate\s+to|browse\s+to)\s+(.+)/i,
+    /visit\s+(.+)/i,
+  ];
+  
+  for (const pattern of navigatePatterns) {
+    const match = input.match(pattern);
+    if (match) {
+      const target = match[1].trim();
+      // Determine platform from URL
+      let platform: 'linkedin' | 'twitter' | 'generic' = 'generic';
+      if (target.includes('linkedin')) platform = 'linkedin';
+      if (target.includes('twitter') || target.includes('x.com')) platform = 'twitter';
+      
+      return {
+        type: 'navigate',
+        platform,
+        target,
+        confidence: 0.8,
+      };
+    }
+  }
+  
+  return null;
 }
 
-export function useBrowserAutomation(): UseBrowserAutomationReturn {
+// ============================================
+// HOOK
+// ============================================
+
+export function useBrowserAutomation() {
+  // State
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [currentRun, setCurrentRun] = useState<AutomationRun | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [pendingApproval, setPendingApproval] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
+  const [browserState, setBrowserState] = useState<BrowserState | null>(null);
+  const [events, setEvents] = useState<AutomationEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Refs
+  const eventListenerRef = useRef<(() => void) | null>(null);
 
-  // Check if running in Electron
-  const isElectron = typeof window !== 'undefined' && !!window.playwright;
+  // Get electron IPC
+  const electron = typeof window !== 'undefined' ? (window as any).electron : null;
 
-  // Initialize browser
-  const initialize = useCallback(async () => {
-    if (!isElectron) {
-      setError('Browser automation requires the desktop app');
-      return;
-    }
+  // ============================================
+  // EVENT HANDLING
+  // ============================================
 
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await window.playwright.initialize();
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to initialize browser');
-      }
-
-      // Load profiles
-      const profileList = await window.playwright.getProfiles();
-      setProfiles(profileList);
-      
-      setIsInitialized(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron]);
-
-  // Shutdown browser
-  const shutdown = useCallback(async () => {
-    if (!isElectron || !isInitialized) return;
-
-    try {
-      await window.playwright.shutdown();
-      setIsInitialized(false);
-      setActiveProfileId(null);
-      setCurrentRun(null);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [isElectron, isInitialized]);
-
-  // Select/create profile for platform
-  const selectProfile = useCallback(async (platform: 'linkedin' | 'twitter'): Promise<BrowserProfile> => {
-    if (!isElectron) throw new Error('Not in Electron');
-
-    const result = await window.playwright.getOrCreateProfile(platform);
-    if (!result.success || !result.profile) {
-      throw new Error(result.error || 'Failed to get profile');
-    }
-
-    setActiveProfileId(result.profile.id);
-    setIsLoggedIn(result.profile.isLoggedIn);
-
-    // Refresh profiles list
-    const profileList = await window.playwright.getProfiles();
-    setProfiles(profileList);
-
-    return result.profile;
-  }, [isElectron]);
-
-  // Check LinkedIn login
-  const checkLinkedInLogin = useCallback(async (): Promise<boolean> => {
-    if (!isElectron || !activeProfileId) return false;
-
-    setIsLoading(true);
-    try {
-      const result = await window.playwright.linkedinCheckLogin(activeProfileId);
-      const loggedIn = result.success && result.isLoggedIn === true;
-      setIsLoggedIn(loggedIn);
-      return loggedIn;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // Check Twitter login
-  const checkTwitterLogin = useCallback(async (): Promise<boolean> => {
-    if (!isElectron || !activeProfileId) return false;
-
-    setIsLoading(true);
-    try {
-      const result = await window.playwright.twitterCheckLogin(activeProfileId);
-      const loggedIn = result.success && result.isLoggedIn === true;
-      setIsLoggedIn(loggedIn);
-      return loggedIn;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // Open login page for manual login
-  const openLoginPage = useCallback(async (platform: 'linkedin' | 'twitter') => {
-    if (!isElectron || !activeProfileId) return;
-
-    const url = platform === 'linkedin' 
-      ? 'https://www.linkedin.com/login'
-      : 'https://twitter.com/login';
-
-    await window.playwright.navigate(activeProfileId, url);
-  }, [isElectron, activeProfileId]);
-
-  // LinkedIn: Send connection request
-  const linkedinConnect = useCallback(async (targetUrl: string, note?: string) => {
-    if (!isElectron || !activeProfileId) throw new Error('Not ready');
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await window.playwright.linkedinConnect(activeProfileId, targetUrl, note);
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to send connection');
-      }
-      if (result.run) {
-        setCurrentRun(result.run);
-        if (result.run.status === 'paused') {
-          setPendingApproval(result.run.id);
-        }
-      }
-    } catch (e) {
-      setError((e as Error).message);
-      throw e;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // LinkedIn: Send message
-  const linkedinMessage = useCallback(async (targetUrl: string, message: string) => {
-    if (!isElectron || !activeProfileId) throw new Error('Not ready');
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await window.playwright.linkedinMessage(activeProfileId, targetUrl, message);
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to send message');
-      }
-      if (result.run) {
-        setCurrentRun(result.run);
-        if (result.run.status === 'paused') {
-          setPendingApproval(result.run.id);
-        }
-      }
-    } catch (e) {
-      setError((e as Error).message);
-      throw e;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // LinkedIn: Extract profile
-  const linkedinExtractProfile = useCallback(async (): Promise<LinkedInProfile | null> => {
-    if (!isElectron || !activeProfileId) return null;
-
-    try {
-      const result = await window.playwright.linkedinExtractProfile(activeProfileId);
-      return result.success ? result.profile : null;
-    } catch (e) {
-      return null;
-    }
-  }, [isElectron, activeProfileId]);
-
-  // Twitter: Follow user
-  const twitterFollow = useCallback(async (username: string) => {
-    if (!isElectron || !activeProfileId) throw new Error('Not ready');
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await window.playwright.twitterFollow(activeProfileId, username);
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to follow');
-      }
-      if (result.run) {
-        setCurrentRun(result.run);
-        if (result.run.status === 'paused') {
-          setPendingApproval(result.run.id);
-        }
-      }
-    } catch (e) {
-      setError((e as Error).message);
-      throw e;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // Twitter: Send DM
-  const twitterDM = useCallback(async (username: string, message: string) => {
-    if (!isElectron || !activeProfileId) throw new Error('Not ready');
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await window.playwright.twitterDM(activeProfileId, username, message);
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to send DM');
-      }
-      if (result.run) {
-        setCurrentRun(result.run);
-        if (result.run.status === 'paused') {
-          setPendingApproval(result.run.id);
-        }
-      }
-    } catch (e) {
-      setError((e as Error).message);
-      throw e;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isElectron, activeProfileId]);
-
-  // Stop current run
-  const stopRun = useCallback(async () => {
-    if (!isElectron) return;
-    await window.playwright.stopRun();
-    setCurrentRun(null);
-    setPendingApproval(null);
-  }, [isElectron]);
-
-  // Approve pending action
-  const approveAction = useCallback(async () => {
-    if (!isElectron || !pendingApproval) return;
-    await window.playwright.approveAction(pendingApproval);
-    setPendingApproval(null);
-  }, [isElectron, pendingApproval]);
-
-  // Reject pending action
-  const rejectAction = useCallback(async () => {
-    if (!isElectron || !pendingApproval) return;
-    await window.playwright.rejectAction(pendingApproval);
-    setPendingApproval(null);
-    setCurrentRun(null);
-  }, [isElectron, pendingApproval]);
-
-  // Listen for automation events
   useEffect(() => {
-    if (!isElectron) return;
+    if (!electron) return;
 
-    const unsubscribe = window.playwright.onEvent((event) => {
+    // Listen for automation events from main process
+    const cleanup = electron.on('automation:event', (event: AutomationEvent) => {
+      setEvents(prev => [...prev.slice(-99), event]); // Keep last 100 events
+
       switch (event.type) {
+        case 'BROWSER_FRAME':
+          setLiveFrame(event.data.frameData);
+          setBrowserState({
+            url: event.data.url,
+            title: event.data.title,
+          });
+          break;
+
         case 'RUN_UPDATE':
           setCurrentRun(event.data.run);
           break;
+
         case 'NEEDS_APPROVAL':
-          setPendingApproval(event.data.runId);
+          setPendingApproval({
+            runId: event.data.runId,
+            action: event.data.action,
+            preview: event.data.preview,
+          });
           break;
+
         case 'RUN_FINISHED':
-        case 'STOPPED':
-          setCurrentRun(null);
           setPendingApproval(null);
           break;
+
+        case 'STOP_ACKNOWLEDGED':
+          setPendingApproval(null);
+          break;
+
         case 'browser_error':
           setError(event.data.error);
           break;
       }
     });
 
-    return unsubscribe;
-  }, [isElectron]);
+    eventListenerRef.current = cleanup;
+
+    return () => {
+      if (eventListenerRef.current) {
+        eventListenerRef.current();
+      }
+    };
+  }, [electron]);
+
+  // ============================================
+  // LIFECYCLE
+  // ============================================
+
+  const initialize = useCallback(async () => {
+    if (!electron || isInitialized) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await electron.invoke('playwright:initialize');
+      if (result.success) {
+        setIsInitialized(true);
+        // Load profiles
+        const loadedProfiles = await electron.invoke('playwright:get-profiles');
+        setProfiles(loadedProfiles);
+      } else {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, isInitialized]);
+
+  const shutdown = useCallback(async () => {
+    if (!electron) return;
+
+    try {
+      await electron.invoke('playwright:shutdown');
+      setIsInitialized(false);
+      setLiveFrame(null);
+      setBrowserState(null);
+      setCurrentRun(null);
+      setPendingApproval(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron]);
+
+  // ============================================
+  // PROFILE MANAGEMENT
+  // ============================================
+
+  const createProfile = useCallback(async (platform: 'linkedin' | 'twitter' | 'generic', name?: string) => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    try {
+      const result = await electron.invoke('playwright:create-profile', platform, name);
+      if (result.success) {
+        setProfiles(prev => [...prev, result.profile]);
+        return result.profile;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron]);
+
+  const getOrCreateProfile = useCallback(async (platform: 'linkedin' | 'twitter' | 'generic') => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    try {
+      const result = await electron.invoke('playwright:get-or-create-profile', platform);
+      if (result.success) {
+        // Update profiles if new one was created
+        const existing = profiles.find(p => p.id === result.profile.id);
+        if (!existing) {
+          setProfiles(prev => [...prev, result.profile]);
+        }
+        setActiveProfileId(result.profile.id);
+        return result.profile;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, profiles]);
+
+  // ============================================
+  // LIVE VIEW
+  // ============================================
+
+  const startStreaming = useCallback(async (profileId: string, fps: number = 2) => {
+    if (!electron) return;
+
+    try {
+      await electron.invoke('playwright:start-streaming', profileId, fps);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron]);
+
+  const stopStreaming = useCallback(async () => {
+    if (!electron) return;
+
+    try {
+      await electron.invoke('playwright:stop-streaming');
+      setLiveFrame(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron]);
+
+  const captureFrame = useCallback(async (profileId: string) => {
+    if (!electron) return null;
+
+    try {
+      const result = await electron.invoke('playwright:capture-frame', profileId);
+      if (result.success) {
+        return result.frame;
+      }
+      return null;
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    }
+  }, [electron]);
+
+  // ============================================
+  // LINKEDIN AUTOMATION
+  // ============================================
+
+  const checkLinkedInLogin = useCallback(async (profileId: string) => {
+    if (!electron) return false;
+
+    try {
+      const result = await electron.invoke('playwright:linkedin-check-login', profileId);
+      return result.success ? result.isLoggedIn : false;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    }
+  }, [electron]);
+
+  const linkedInConnect = useCallback(async (targetUrl: string, note?: string) => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Get or create LinkedIn profile
+      const profile = await getOrCreateProfile('linkedin');
+      if (!profile) return null;
+
+      // Check login
+      const isLoggedIn = await checkLinkedInLogin(profile.id);
+      if (!isLoggedIn) {
+        // Navigate to LinkedIn so user can log in
+        await electron.invoke('playwright:linkedin-navigate', profile.id);
+        setError('Please log in to LinkedIn first');
+        return null;
+      }
+
+      // Start the connection flow
+      const result = await electron.invoke('playwright:linkedin-connect', profile.id, targetUrl, note);
+      if (result.success) {
+        setCurrentRun(result.run);
+        return result.run;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile, checkLinkedInLogin]);
+
+  const linkedInMessage = useCallback(async (targetUrl: string, message: string) => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const profile = await getOrCreateProfile('linkedin');
+      if (!profile) return null;
+
+      const isLoggedIn = await checkLinkedInLogin(profile.id);
+      if (!isLoggedIn) {
+        await electron.invoke('playwright:linkedin-navigate', profile.id);
+        setError('Please log in to LinkedIn first');
+        return null;
+      }
+
+      const result = await electron.invoke('playwright:linkedin-message', profile.id, targetUrl, message);
+      if (result.success) {
+        setCurrentRun(result.run);
+        return result.run;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile, checkLinkedInLogin]);
+
+  // ============================================
+  // TWITTER AUTOMATION
+  // ============================================
+
+  const checkTwitterLogin = useCallback(async (profileId: string) => {
+    if (!electron) return false;
+
+    try {
+      const result = await electron.invoke('playwright:twitter-check-login', profileId);
+      return result.success ? result.isLoggedIn : false;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    }
+  }, [electron]);
+
+  const twitterFollow = useCallback(async (username: string) => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const profile = await getOrCreateProfile('twitter');
+      if (!profile) return null;
+
+      const isLoggedIn = await checkTwitterLogin(profile.id);
+      if (!isLoggedIn) {
+        await electron.invoke('playwright:navigate', profile.id, 'https://twitter.com');
+        setError('Please log in to Twitter first');
+        return null;
+      }
+
+      const result = await electron.invoke('playwright:twitter-follow', profile.id, username);
+      if (result.success) {
+        setCurrentRun(result.run);
+        return result.run;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile, checkTwitterLogin]);
+
+  const twitterDM = useCallback(async (username: string, message: string) => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const profile = await getOrCreateProfile('twitter');
+      if (!profile) return null;
+
+      const isLoggedIn = await checkTwitterLogin(profile.id);
+      if (!isLoggedIn) {
+        await electron.invoke('playwright:navigate', profile.id, 'https://twitter.com');
+        setError('Please log in to Twitter first');
+        return null;
+      }
+
+      const result = await electron.invoke('playwright:twitter-dm', profile.id, username, message);
+      if (result.success) {
+        setCurrentRun(result.run);
+        return result.run;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile, checkTwitterLogin]);
+
+  // ============================================
+  // RUN CONTROL
+  // ============================================
+
+  const approveAction = useCallback(async () => {
+    if (!electron || !pendingApproval) return;
+
+    try {
+      await electron.invoke('playwright:approve-action', pendingApproval.runId);
+      setPendingApproval(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron, pendingApproval]);
+
+  const rejectAction = useCallback(async () => {
+    if (!electron || !pendingApproval) return;
+
+    try {
+      await electron.invoke('playwright:reject-action', pendingApproval.runId);
+      setPendingApproval(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron, pendingApproval]);
+
+  const stopRun = useCallback(async () => {
+    if (!electron) return;
+
+    try {
+      await electron.invoke('playwright:stop-run');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [electron]);
+
+  // ============================================
+  // GENERIC NAVIGATION
+  // ============================================
+
+  const navigate = useCallback(async (url: string, platform: 'linkedin' | 'twitter' | 'generic' = 'generic') => {
+    if (!electron) return;
+
+    setIsLoading(true);
+    try {
+      const profile = await getOrCreateProfile(platform);
+      if (!profile) return;
+
+      await electron.invoke('playwright:navigate', profile.id, url);
+      
+      // Start streaming to show live view
+      await startStreaming(profile.id);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile, startStreaming]);
+
+  // ============================================
+  // NATURAL LANGUAGE COMMAND EXECUTION
+  // ============================================
+
+  const executeCommand = useCallback(async (input: string): Promise<{ success: boolean; message: string }> => {
+    const command = detectBrowserCommand(input);
+    
+    if (!command) {
+      return { success: false, message: 'Could not understand the command' };
+    }
+
+    if (!isInitialized) {
+      await initialize();
+    }
+
+    switch (command.type) {
+      case 'linkedin_connect':
+        if (!command.target) {
+          return { success: false, message: 'Please specify who to connect with' };
+        }
+        // If target is a name, we'd need to search first
+        // For now, assume it's a URL or construct one
+        const connectUrl = command.target.startsWith('http') 
+          ? command.target 
+          : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
+        const connectRun = await linkedInConnect(connectUrl);
+        return connectRun 
+          ? { success: true, message: `Started connection request to ${command.target}` }
+          : { success: false, message: error || 'Failed to start connection' };
+
+      case 'linkedin_message':
+        if (!command.target) {
+          return { success: false, message: 'Please specify who to message' };
+        }
+        if (!command.message) {
+          return { success: false, message: 'Please specify what message to send' };
+        }
+        const messageUrl = command.target.startsWith('http')
+          ? command.target
+          : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
+        const messageRun = await linkedInMessage(messageUrl, command.message);
+        return messageRun
+          ? { success: true, message: `Started messaging ${command.target}` }
+          : { success: false, message: error || 'Failed to start message' };
+
+      case 'twitter_follow':
+        if (!command.target) {
+          return { success: false, message: 'Please specify who to follow' };
+        }
+        const followRun = await twitterFollow(command.target);
+        return followRun
+          ? { success: true, message: `Started following @${command.target}` }
+          : { success: false, message: error || 'Failed to start follow' };
+
+      case 'twitter_dm':
+        if (!command.target) {
+          return { success: false, message: 'Please specify who to DM' };
+        }
+        if (!command.message) {
+          return { success: false, message: 'Please specify what message to send' };
+        }
+        const dmRun = await twitterDM(command.target, command.message);
+        return dmRun
+          ? { success: true, message: `Started DM to @${command.target}` }
+          : { success: false, message: error || 'Failed to start DM' };
+
+      case 'navigate':
+        if (!command.target) {
+          return { success: false, message: 'Please specify where to navigate' };
+        }
+        const navUrl = command.target.startsWith('http') ? command.target : `https://${command.target}`;
+        await navigate(navUrl, command.platform);
+        return { success: true, message: `Navigating to ${command.target}` };
+
+      default:
+        return { success: false, message: 'Unknown command type' };
+    }
+  }, [isInitialized, initialize, linkedInConnect, linkedInMessage, twitterFollow, twitterDM, navigate, error]);
+
+  // ============================================
+  // RETURN
+  // ============================================
 
   return {
+    // State
     isInitialized,
     isLoading,
-    error,
     profiles,
     activeProfileId,
     currentRun,
-    isLoggedIn,
+    pendingApproval,
+    liveFrame,
+    browserState,
+    events,
+    error,
+
+    // Lifecycle
     initialize,
     shutdown,
-    selectProfile,
+
+    // Profile management
+    createProfile,
+    getOrCreateProfile,
+
+    // Live view
+    startStreaming,
+    stopStreaming,
+    captureFrame,
+
+    // LinkedIn
     checkLinkedInLogin,
+    linkedInConnect,
+    linkedInMessage,
+
+    // Twitter
     checkTwitterLogin,
-    openLoginPage,
-    linkedinConnect,
-    linkedinMessage,
-    linkedinExtractProfile,
     twitterFollow,
     twitterDM,
-    stopRun,
+
+    // Run control
     approveAction,
     rejectAction,
+    stopRun,
+
+    // Navigation
+    navigate,
+
+    // Natural language
+    detectBrowserCommand,
+    executeCommand,
   };
 }
 

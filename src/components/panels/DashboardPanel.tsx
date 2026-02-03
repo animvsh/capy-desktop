@@ -234,7 +234,7 @@ export function DashboardPanel() {
       .eq('user_id', user.id);
 
     // Update capy agent state to stopped
-    const { error: agentError } = await supabase
+    const { error: agentError } = await supabaseUntyped
       .from('capy_agent_state')
       .upsert({
         user_id: user.id,
@@ -247,7 +247,7 @@ export function DashboardPanel() {
       });
 
     // Clear all active chat sessions
-    const { error: sessionError } = await supabase
+    const { error: sessionError } = await supabaseUntyped
       .from('chat_sessions')
       .update({
         state: 'idle',

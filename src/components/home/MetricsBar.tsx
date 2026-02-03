@@ -209,7 +209,7 @@ export function MetricsBar() {
     if (!user) return;
 
     // Check capy_agent_state first (this is what the cron job uses)
-    const { data: agentState } = await supabase
+    const { data: agentState } = await supabaseUntyped
       .from('capy_agent_state')
       .select('enabled, state')
       .eq('user_id', user.id)
@@ -266,13 +266,13 @@ export function MetricsBar() {
 
     // Also update capy_agent_state to stop/start the cron job
     // Use upsert to create the row if it doesn't exist (fixes new user issue)
-    const { data: existingState } = await supabase
+    const { data: existingState } = await supabaseUntyped
       .from('capy_agent_state')
       .select('state')
       .eq('user_id', user.id)
       .maybeSingle();
 
-    const { error: agentError } = await supabase
+    const { error: agentError } = await supabaseUntyped
       .from('capy_agent_state')
       .upsert({
         user_id: user.id,
@@ -318,7 +318,7 @@ export function MetricsBar() {
       .eq('user_id', user.id);
 
     // Update capy agent state to stopped
-    const { error: agentError } = await supabase
+    const { error: agentError } = await supabaseUntyped
       .from('capy_agent_state')
       .upsert({
         user_id: user.id,
@@ -331,7 +331,7 @@ export function MetricsBar() {
       });
 
     // Clear all active chat sessions
-    const { error: sessionError } = await supabase
+    const { error: sessionError } = await supabaseUntyped
       .from('chat_sessions')
       .update({
         state: 'idle',

@@ -346,14 +346,14 @@ export function ContactsPanel() {
       setLoadingThread(true);
       try {
         // Fetch outreach records for this lead
-        const { data: outreach } = await supabase
+        const { data: outreach } = await supabaseUntyped
           .from('outreach')
           .select('*')
           .eq('lead_id', contact.id)
           .order('sent_at', { ascending: true });
 
         // Fetch any received emails
-        const { data: received } = await supabase
+        const { data: received } = await supabaseUntyped
           .from('received_emails')
           .select('*')
           .eq('from_email', contact.email)

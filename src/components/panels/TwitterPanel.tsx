@@ -1,12 +1,11 @@
 /**
- * LinkedInPanel - LinkedIn Automation Interface
+ * TwitterPanel - Twitter/X Automation Interface
  * 
  * Features:
- * - Live browser view of LinkedIn
- * - Connection request automation
- * - Message automation
+ * - Live browser view of Twitter
+ * - Follow automation
+ * - DM automation
  * - Login status management
- * - Step-by-step visibility
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -18,9 +17,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useBrowserAutomation } from '@/hooks/useBrowserAutomation';
 import { LiveView } from '@/components/browser/LiveView';
-import { cn } from '@/lib/utils';
 
-export function LinkedInPanel() {
+export function TwitterPanel() {
   const {
     isInitialized,
     isLoading,
@@ -30,15 +28,14 @@ export function LinkedInPanel() {
     isLoggedIn,
     initialize,
     selectProfile,
-    checkLinkedInLogin,
+    checkTwitterLogin,
     openLoginPage,
-    linkedinConnect,
-    linkedinMessage,
+    twitterFollow,
+    twitterDM,
   } = useBrowserAutomation();
 
-  const [targetUrl, setTargetUrl] = useState('');
+  const [username, setUsername] = useState('');
   const [message, setMessage] = useState('');
-  const [connectionNote, setConnectionNote] = useState('');
   const [isCheckingLogin, setIsCheckingLogin] = useState(false);
 
   // Check if running in Electron
@@ -51,10 +48,10 @@ export function LinkedInPanel() {
     }
   }, [isElectron, isInitialized, initialize]);
 
-  // Select LinkedIn profile on init
+  // Select Twitter profile on init
   useEffect(() => {
     if (isInitialized && !activeProfileId) {
-      selectProfile('linkedin').catch(console.error);
+      selectProfile('twitter').catch(console.error);
     }
   }, [isInitialized, activeProfileId, selectProfile]);
 
@@ -62,37 +59,36 @@ export function LinkedInPanel() {
   const handleCheckLogin = useCallback(async () => {
     setIsCheckingLogin(true);
     try {
-      await checkLinkedInLogin();
+      await checkTwitterLogin();
     } finally {
       setIsCheckingLogin(false);
     }
-  }, [checkLinkedInLogin]);
+  }, [checkTwitterLogin]);
 
-  // Open LinkedIn login page
+  // Open Twitter login page
   const handleOpenLogin = useCallback(async () => {
-    await openLoginPage('linkedin');
-    // After user logs in, they should click "Check Again"
+    await openLoginPage('twitter');
   }, [openLoginPage]);
 
-  // Send connection request
-  const handleConnect = useCallback(async () => {
-    if (!targetUrl) return;
+  // Follow user
+  const handleFollow = useCallback(async () => {
+    if (!username) return;
     try {
-      await linkedinConnect(targetUrl, connectionNote || undefined);
+      await twitterFollow(username.replace('@', ''));
     } catch (e) {
-      console.error('Connection failed:', e);
+      console.error('Follow failed:', e);
     }
-  }, [targetUrl, connectionNote, linkedinConnect]);
+  }, [username, twitterFollow]);
 
-  // Send message
-  const handleMessage = useCallback(async () => {
-    if (!targetUrl || !message) return;
+  // Send DM
+  const handleDM = useCallback(async () => {
+    if (!username || !message) return;
     try {
-      await linkedinMessage(targetUrl, message);
+      await twitterDM(username.replace('@', ''), message);
     } catch (e) {
-      console.error('Message failed:', e);
+      console.error('DM failed:', e);
     }
-  }, [targetUrl, message, linkedinMessage]);
+  }, [username, message, twitterDM]);
 
   // Show web version message if not in Electron
   if (!isElectron) {
@@ -102,8 +98,8 @@ export function LinkedInPanel() {
           <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-xl sm:text-2xl font-extrabold text-foreground">LinkedIn Outreach</h1>
-                <Badge className="bg-blue-500 text-white border-0">Desktop Required</Badge>
+                <h1 className="text-xl sm:text-2xl font-extrabold text-foreground">Twitter/X Outreach</h1>
+                <Badge className="bg-sky-500 text-white border-0">Desktop Required</Badge>
               </div>
               <p className="text-sm text-muted-foreground mt-1">Browser automation requires the desktop app</p>
             </div>
@@ -111,15 +107,14 @@ export function LinkedInPanel() {
 
           <Card className="border-dashed">
             <CardContent className="pt-6 text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-xl bg-[#0A66C2]/10 mb-4">
-                <i className="fa-brands fa-linkedin text-3xl text-[#0A66C2]" />
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-xl bg-sky-500/10 mb-4">
+                <i className="fa-brands fa-x-twitter text-3xl text-foreground" />
               </div>
               <h2 className="text-xl font-bold mb-2">Desktop App Required</h2>
               <p className="text-muted-foreground mb-4 max-w-md mx-auto">
-                LinkedIn automation requires the Capy desktop app for secure browser control.
-                Download the app to access automated outreach features.
+                Twitter automation requires the Capy desktop app for secure browser control.
               </p>
-              <Button className="bg-[#0A66C2] hover:bg-[#004182]">
+              <Button className="bg-sky-500 hover:bg-sky-600">
                 <i className="fa-solid fa-download mr-2" />
                 Download Desktop App
               </Button>
@@ -137,7 +132,7 @@ export function LinkedInPanel() {
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-xl sm:text-2xl font-extrabold text-foreground">LinkedIn Outreach</h1>
+              <h1 className="text-xl sm:text-2xl font-extrabold text-foreground">Twitter/X Outreach</h1>
               {isLoggedIn ? (
                 <Badge className="bg-emerald-500 text-white border-0">
                   <i className="fa-solid fa-check mr-1" /> Connected
@@ -149,7 +144,7 @@ export function LinkedInPanel() {
               )}
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              Automate LinkedIn connections and messages with live browser view
+              Automate Twitter follows and DMs with live browser view
             </p>
           </div>
 
@@ -161,7 +156,7 @@ export function LinkedInPanel() {
               </Badge>
             )}
             {currentRun && (
-              <Badge className="bg-blue-500">
+              <Badge className="bg-sky-500">
                 <i className="fa-solid fa-play mr-1" /> {currentRun.type.replace('_', ' ')}
               </Badge>
             )}
@@ -185,15 +180,15 @@ export function LinkedInPanel() {
                   <i className="fa-solid fa-user-lock text-xl" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-semibold mb-1">Login to LinkedIn</h3>
+                  <h3 className="font-semibold mb-1">Login to Twitter/X</h3>
                   <p className="text-sm text-muted-foreground mb-3">
-                    You need to log in to your LinkedIn account to use automation features.
-                    The browser will open LinkedIn's login page - log in manually, then click "Check Again".
+                    You need to log in to your Twitter account to use automation features.
+                    The browser will open Twitter's login page - log in manually, then click "Check Again".
                   </p>
                   <div className="flex gap-2">
                     <Button onClick={handleOpenLogin} disabled={isCheckingLogin}>
-                      <i className="fa-brands fa-linkedin mr-2" />
-                      Open LinkedIn Login
+                      <i className="fa-brands fa-x-twitter mr-2" />
+                      Open Twitter Login
                     </Button>
                     <Button variant="outline" onClick={handleCheckLogin} disabled={isCheckingLogin}>
                       {isCheckingLogin ? (
@@ -216,74 +211,63 @@ export function LinkedInPanel() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Automation Actions</CardTitle>
-                <CardDescription>Send connection requests or messages</CardDescription>
+                <CardDescription>Follow users or send direct messages</CardDescription>
               </CardHeader>
               <CardContent>
-                <Tabs defaultValue="connect" className="w-full">
+                <Tabs defaultValue="follow" className="w-full">
                   <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="connect">
-                      <i className="fa-solid fa-user-plus mr-2" /> Connect
+                    <TabsTrigger value="follow">
+                      <i className="fa-solid fa-user-plus mr-2" /> Follow
                     </TabsTrigger>
-                    <TabsTrigger value="message">
-                      <i className="fa-solid fa-envelope mr-2" /> Message
+                    <TabsTrigger value="dm">
+                      <i className="fa-solid fa-envelope mr-2" /> DM
                     </TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value="connect" className="space-y-4 mt-4">
+                  <TabsContent value="follow" className="space-y-4 mt-4">
                     <div>
-                      <label className="text-sm font-medium mb-2 block">LinkedIn Profile URL</label>
+                      <label className="text-sm font-medium mb-2 block">Twitter Username</label>
                       <Input
-                        placeholder="https://www.linkedin.com/in/username"
-                        value={targetUrl}
-                        onChange={(e) => setTargetUrl(e.target.value)}
+                        placeholder="@username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
                       />
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium mb-2 block">Connection Note (optional)</label>
-                      <Textarea
-                        placeholder="Hi! I'd love to connect..."
-                        value={connectionNote}
-                        onChange={(e) => setConnectionNote(e.target.value)}
-                        rows={3}
-                        maxLength={300}
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">{connectionNote.length}/300</p>
                     </div>
                     <Button
-                      className="w-full bg-[#0A66C2] hover:bg-[#004182]"
-                      onClick={handleConnect}
-                      disabled={!targetUrl || !isLoggedIn || isLoading || !!currentRun}
+                      className="w-full bg-sky-500 hover:bg-sky-600"
+                      onClick={handleFollow}
+                      disabled={!username || !isLoggedIn || isLoading || !!currentRun}
                     >
                       <i className="fa-solid fa-user-plus mr-2" />
-                      Send Connection Request
+                      Follow User
                     </Button>
                   </TabsContent>
 
-                  <TabsContent value="message" className="space-y-4 mt-4">
+                  <TabsContent value="dm" className="space-y-4 mt-4">
                     <div>
-                      <label className="text-sm font-medium mb-2 block">LinkedIn Profile URL</label>
+                      <label className="text-sm font-medium mb-2 block">Twitter Username</label>
                       <Input
-                        placeholder="https://www.linkedin.com/in/username"
-                        value={targetUrl}
-                        onChange={(e) => setTargetUrl(e.target.value)}
+                        placeholder="@username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
                       />
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-2 block">Message</label>
                       <Textarea
-                        placeholder="Your message..."
+                        placeholder="Your direct message..."
                         value={message}
                         onChange={(e) => setMessage(e.target.value)}
                         rows={4}
                       />
                     </div>
                     <Button
-                      className="w-full bg-[#0A66C2] hover:bg-[#004182]"
-                      onClick={handleMessage}
-                      disabled={!targetUrl || !message || !isLoggedIn || isLoading || !!currentRun}
+                      className="w-full bg-sky-500 hover:bg-sky-600"
+                      onClick={handleDM}
+                      disabled={!username || !message || !isLoggedIn || isLoading || !!currentRun}
                     >
                       <i className="fa-solid fa-paper-plane mr-2" />
-                      Send Message
+                      Send DM
                     </Button>
                   </TabsContent>
                 </Tabs>
@@ -299,10 +283,10 @@ export function LinkedInPanel() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-2">
-                <p>• <strong>Personalize</strong> your connection notes for better acceptance rates</p>
+                <p>• <strong>DMs require mutual follow</strong> or open DMs on their end</p>
                 <p>• <strong>Wait</strong> for approval before sending - review the preview</p>
-                <p>• <strong>Don't spam</strong> - LinkedIn may restrict your account</p>
-                <p>• <strong>Log in first</strong> using the browser view on the right</p>
+                <p>• <strong>Don't mass follow</strong> - Twitter may restrict your account</p>
+                <p>• <strong>Personalize</strong> your DMs for better response rates</p>
               </CardContent>
             </Card>
           </div>
@@ -321,7 +305,7 @@ export function LinkedInPanel() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Recent Activity</CardTitle>
-            <CardDescription>Your recent LinkedIn automation runs</CardDescription>
+            <CardDescription>Your recent Twitter automation runs</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-center py-8 text-muted-foreground">
@@ -336,4 +320,4 @@ export function LinkedInPanel() {
   );
 }
 
-export default LinkedInPanel;
+export default TwitterPanel;
