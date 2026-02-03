@@ -75,8 +75,10 @@ interface PlaywrightAPI {
   // Run Control
   approveAction: (runId: string) => Promise<{ success: boolean; error?: string }>;
   rejectAction: (runId: string) => Promise<{ success: boolean; error?: string }>;
-  stopRun: () => Promise<{ success: boolean; error?: string }>;
+  stopRun: (runId?: string) => Promise<{ success: boolean; error?: string }>;
   getCurrentRun: () => Promise<AutomationRun | null>;
+  getActiveRuns: () => Promise<AutomationRun[]>;
+  isProfileBusy: (profileId: string) => Promise<boolean>;
 
   // Generic Navigation
   navigate: (profileId: string, url: string) => Promise<{ success: boolean; error?: string }>;

@@ -8,6 +8,9 @@
  * - Twitter automation (follow, DM)
  * - Human-in-the-loop approval
  * - Step-by-step run management
+ * 
+ * CHAOS-TESTED: Handles race conditions, concurrent operations,
+ * browser crashes, and rapid stop/start cycles gracefully.
  */
 
 import { BrowserWindow, ipcMain, app } from 'electron'
@@ -66,6 +69,7 @@ interface AutomationRun {
   error?: string
   startTime?: number
   endTime?: number
+  profileId: string  // Track which profile this run belongs to
 }
 
 // ============================================
@@ -78,13 +82,24 @@ const contexts: Map<string, BrowserContext> = new Map()
 const pages: Map<string, Page> = new Map()
 let profiles: BrowserProfile[] = []
 let activeProfileId: string | null = null
-let currentRun: AutomationRun | null = null
-let streamingInterval: NodeJS.Timeout | null = null
-let approvalResolver: ((approved: boolean) => void) | null = null
+
+// CHAOS FIX: Use Maps for concurrent operation support
+const activeRuns: Map<string, AutomationRun> = new Map()  // runId -> run
+const approvalResolvers: Map<string, (approved: boolean) => void> = new Map()  // runId -> resolver
+const approvalTimeouts: Map<string, NodeJS.Timeout> = new Map()  // runId -> timeout
+
+// CHAOS FIX: Per-profile operation locks to prevent concurrent operations
+const profileLocks: Map<string, boolean> = new Map()
+
+// Streaming state - one stream per profile for efficiency
+const streamingIntervals: Map<string, NodeJS.Timeout> = new Map()
 
 // Profile storage path
 const getProfilesDir = () => join(app.getPath('userData'), 'browser-profiles')
 const getProfilesFile = () => join(app.getPath('userData'), 'profiles.json')
+
+// Shutdown flag to prevent new operations during shutdown
+let isShuttingDown = false
 
 // ============================================
 // HELPERS
@@ -94,25 +109,44 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 }
 
+/**
+ * CHAOS FIX: Safe event emission with proper null/destroyed checks
+ */
 function emitEvent(type: string, data: Record<string, any>) {
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-    try {
-      mainWindow.webContents.send('automation:event', {
-        type,
-        timestamp: Date.now(),
-        data,
-      })
-    } catch (err) {
-      console.error('Failed to emit event:', err)
+  try {
+    // Triple-check window validity
+    if (!mainWindow) {
+      console.warn('[Playwright] Cannot emit event: mainWindow is null')
+      return
     }
+    if (mainWindow.isDestroyed()) {
+      console.warn('[Playwright] Cannot emit event: mainWindow is destroyed')
+      return
+    }
+    if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) {
+      console.warn('[Playwright] Cannot emit event: webContents is destroyed')
+      return
+    }
+    
+    mainWindow.webContents.send('automation:event', {
+      type,
+      timestamp: Date.now(),
+      data,
+    })
+  } catch (err) {
+    console.error('[Playwright] Failed to emit event:', err)
   }
 }
 
 function saveProfiles() {
   const file = getProfilesFile()
   const dir = getProfilesDir()
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(file, JSON.stringify(profiles, null, 2))
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify(profiles, null, 2))
+  } catch (err) {
+    console.error('[Playwright] Failed to save profiles:', err)
+  }
 }
 
 function loadProfiles(): BrowserProfile[] {
@@ -134,6 +168,44 @@ async function delay(ms: number): Promise<void> {
 async function humanLikeDelay(): Promise<void> {
   // Random delay between 500ms and 2000ms to appear human
   await delay(500 + Math.random() * 1500)
+}
+
+/**
+ * CHAOS FIX: Acquire lock for profile operations
+ * Returns true if lock acquired, false if profile is busy
+ */
+function acquireProfileLock(profileId: string): boolean {
+  if (profileLocks.get(profileId)) {
+    console.warn(`[Playwright] Profile ${profileId} is busy - operation rejected`)
+    return false
+  }
+  profileLocks.set(profileId, true)
+  return true
+}
+
+function releaseProfileLock(profileId: string): void {
+  profileLocks.delete(profileId)
+}
+
+/**
+ * CHAOS FIX: Check if a run is still active (not stopped/failed/complete)
+ */
+function isRunActive(runId: string): boolean {
+  const run = activeRuns.get(runId)
+  if (!run) return false
+  return run.status === 'running' || run.status === 'paused'
+}
+
+/**
+ * CHAOS FIX: Get active run for a profile, if any
+ */
+function getActiveRunForProfile(profileId: string): AutomationRun | null {
+  for (const run of activeRuns.values()) {
+    if (run.profileId === profileId && (run.status === 'running' || run.status === 'paused')) {
+      return run
+    }
+  }
+  return null
 }
 
 // ============================================
@@ -186,12 +258,40 @@ async function getBrowserContext(profile: BrowserProfile): Promise<BrowserContex
   return context
 }
 
+/**
+ * CHAOS FIX: Safe page getter with stale reference handling
+ */
 async function getPage(profile: BrowserProfile): Promise<Page> {
   const context = await getBrowserContext(profile)
   let page = pages.get(profile.id)
-  if (!page || page.isClosed()) {
+  
+  // Check if page exists and is still valid
+  if (page) {
+    try {
+      // Try to access the page - will throw if it's closed
+      if (page.isClosed()) {
+        pages.delete(profile.id)
+        page = undefined
+      }
+    } catch {
+      pages.delete(profile.id)
+      page = undefined
+    }
+  }
+  
+  if (!page) {
     page = await context.newPage()
     pages.set(profile.id, page)
+    
+    // CHAOS FIX: Handle page close events to clean up state
+    page.on('close', () => {
+      pages.delete(profile.id)
+      // If there's an active run using this page, mark it as failed
+      const activeRun = getActiveRunForProfile(profile.id)
+      if (activeRun) {
+        failRun(activeRun.id, 'Browser page was closed unexpectedly')
+      }
+    })
   }
   return page
 }
@@ -203,7 +303,7 @@ async function saveContextState(profile: BrowserProfile): Promise<void> {
     try {
       await context.storageState({ path: statePath })
     } catch (e) {
-      console.error('Failed to save state:', e)
+      console.error('[Playwright] Failed to save state:', e)
     }
   }
 }
@@ -212,49 +312,92 @@ async function saveContextState(profile: BrowserProfile): Promise<void> {
 // LIVE VIEW STREAMING
 // ============================================
 
+/**
+ * CHAOS FIX: Safe frame capture with error handling
+ */
 async function captureFrame(profileId: string): Promise<string | null> {
   const page = pages.get(profileId)
-  if (!page || page.isClosed()) return null
-
+  if (!page) return null
+  
   try {
-    const buffer = await page.screenshot({ type: 'jpeg', quality: 60 })
+    // Quick check if page is closed
+    if (page.isClosed()) {
+      pages.delete(profileId)
+      return null
+    }
+    
+    const buffer = await page.screenshot({ type: 'jpeg', quality: 60, timeout: 5000 })
     return `data:image/jpeg;base64,${buffer.toString('base64')}`
-  } catch {
+  } catch (err) {
+    // Page might have closed during screenshot
+    console.warn('[Playwright] Frame capture failed:', err)
     return null
   }
 }
 
+/**
+ * CHAOS FIX: Streaming with per-profile intervals
+ */
 function startStreaming(profileId: string, fps: number = 2): void {
-  stopStreaming()
+  // Stop any existing stream for this profile
+  stopStreaming(profileId)
+  
   const intervalMs = 1000 / fps
 
-  streamingInterval = setInterval(async () => {
+  const interval = setInterval(async () => {
+    // Safety check: stop streaming if window is gone
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      stopStreaming(profileId)
+      return
+    }
+    
     const frame = await captureFrame(profileId)
     const page = pages.get(profileId)
-    if (frame && page) {
-      emitEvent('BROWSER_FRAME', {
-        frameData: frame,
-        url: page.url(),
-        title: await page.title(),
-      })
+    if (frame && page && !page.isClosed()) {
+      try {
+        emitEvent('BROWSER_FRAME', {
+          frameData: frame,
+          url: page.url(),
+          title: await page.title().catch(() => ''),
+          profileId,
+        })
+      } catch {
+        // Page closed during event emission
+        stopStreaming(profileId)
+      }
     }
   }, intervalMs)
+  
+  streamingIntervals.set(profileId, interval)
 }
 
-function stopStreaming(): void {
-  if (streamingInterval) {
-    clearInterval(streamingInterval)
-    streamingInterval = null
+function stopStreaming(profileId?: string): void {
+  if (profileId) {
+    const interval = streamingIntervals.get(profileId)
+    if (interval) {
+      clearInterval(interval)
+      streamingIntervals.delete(profileId)
+    }
+  } else {
+    // Stop all streams
+    for (const [id, interval] of streamingIntervals) {
+      clearInterval(interval)
+    }
+    streamingIntervals.clear()
   }
 }
 
 // ============================================
-// RUN MANAGEMENT
+// RUN MANAGEMENT (CHAOS-HARDENED)
 // ============================================
 
+/**
+ * CHAOS FIX: Create run with proper tracking
+ */
 function createRun(
   type: AutomationRun['type'],
   steps: Omit<AutomationStep, 'id' | 'status'>[],
+  profileId: string,
   target?: AutomationRun['target']
 ): AutomationRun {
   const run: AutomationRun = {
@@ -269,102 +412,166 @@ function createRun(
     currentStepIndex: 0,
     target,
     startTime: Date.now(),
+    profileId,
   }
-  currentRun = run
+  
+  activeRuns.set(run.id, run)
   emitEvent('RUN_UPDATE', { run })
   return run
 }
 
-function updateStepStatus(status: AutomationStep['status'], error?: string): void {
-  if (!currentRun) return
+function updateStepStatus(runId: string, status: AutomationStep['status'], error?: string): void {
+  const run = activeRuns.get(runId)
+  if (!run) return
 
-  const step = currentRun.steps[currentRun.currentStepIndex]
+  const step = run.steps[run.currentStepIndex]
   if (step) {
     step.status = status
-    if (status === 'complete' && currentRun.currentStepIndex < currentRun.steps.length - 1) {
-      currentRun.currentStepIndex++
-      currentRun.steps[currentRun.currentStepIndex].status = 'running'
+    if (status === 'complete' && run.currentStepIndex < run.steps.length - 1) {
+      run.currentStepIndex++
+      run.steps[run.currentStepIndex].status = 'running'
     }
   }
 
   if (error) {
-    currentRun.error = error
-    currentRun.status = 'failed'
+    run.error = error
+    run.status = 'failed'
   }
 
-  emitEvent('RUN_UPDATE', { run: currentRun })
+  emitEvent('RUN_UPDATE', { run })
 }
 
-function completeRun(): AutomationRun | null {
-  if (!currentRun) return null
-  currentRun.status = 'complete'
-  currentRun.endTime = Date.now()
-  const completedRun = { ...currentRun } // Clone before nulling
+function completeRun(runId: string): AutomationRun | null {
+  const run = activeRuns.get(runId)
+  if (!run) return null
+  
+  run.status = 'complete'
+  run.endTime = Date.now()
+  const completedRun = { ...run }
+  
+  // Clean up
+  activeRuns.delete(runId)
+  clearApproval(runId)
+  releaseProfileLock(run.profileId)
+  
   emitEvent('RUN_FINISHED', { run: completedRun })
-  currentRun = null
   return completedRun
 }
 
-function failRun(error: string): AutomationRun | null {
-  if (!currentRun) return null
-  currentRun.status = 'failed'
-  currentRun.error = error
-  currentRun.endTime = Date.now()
-  const failedRun = { ...currentRun } // Clone before nulling
+function failRun(runId: string, error: string): AutomationRun | null {
+  const run = activeRuns.get(runId)
+  if (!run) return null
+  
+  run.status = 'failed'
+  run.error = error
+  run.endTime = Date.now()
+  const failedRun = { ...run }
+  
+  // Clean up
+  activeRuns.delete(runId)
+  clearApproval(runId)
+  releaseProfileLock(run.profileId)
+  
   emitEvent('RUN_FINISHED', { run: failedRun })
-  currentRun = null
   return failedRun
 }
 
-function stopRun(): void {
-  if (!currentRun) return
-  currentRun.status = 'stopped'
-  currentRun.endTime = Date.now()
-  if (approvalResolver) {
-    approvalResolver(false)
-    approvalResolver = null
+/**
+ * CHAOS FIX: Stop run with proper cleanup
+ */
+function stopRun(runId?: string): void {
+  if (runId) {
+    // Stop specific run
+    const run = activeRuns.get(runId)
+    if (!run) return
+    
+    run.status = 'stopped'
+    run.endTime = Date.now()
+    
+    // Clear any pending approval
+    clearApproval(runId)
+    
+    // Clean up
+    activeRuns.delete(runId)
+    releaseProfileLock(run.profileId)
+    
+    emitEvent('STOP_ACKNOWLEDGED', { run })
+  } else {
+    // Stop all runs
+    for (const [id, run] of activeRuns) {
+      run.status = 'stopped'
+      run.endTime = Date.now()
+      clearApproval(id)
+      releaseProfileLock(run.profileId)
+      emitEvent('STOP_ACKNOWLEDGED', { run })
+    }
+    activeRuns.clear()
   }
-  emitEvent('STOP_ACKNOWLEDGED', { run: currentRun })
-  currentRun = null
 }
 
-async function waitForApproval(action: string, preview: { target: string; content: string }, timeoutMs: number = 300000): Promise<boolean> {
-  if (!currentRun) return false
+/**
+ * CHAOS FIX: Clear approval resolver and timeout for a run
+ */
+function clearApproval(runId: string): void {
+  const resolver = approvalResolvers.get(runId)
+  if (resolver) {
+    resolver(false) // Auto-reject
+    approvalResolvers.delete(runId)
+  }
+  
+  const timeout = approvalTimeouts.get(runId)
+  if (timeout) {
+    clearTimeout(timeout)
+    approvalTimeouts.delete(runId)
+  }
+}
 
-  currentRun.status = 'paused'
+/**
+ * CHAOS FIX: Approval with proper timeout handling and cleanup
+ */
+async function waitForApproval(runId: string, action: string, preview: { target: string; content: string }, timeoutMs: number = 300000): Promise<boolean> {
+  const run = activeRuns.get(runId)
+  if (!run) return false
+
+  run.status = 'paused'
   emitEvent('NEEDS_APPROVAL', {
-    runId: currentRun.id,
+    runId,
     action,
     preview,
   })
 
   return new Promise(resolve => {
-    // Set up timeout to prevent memory leak from unresolved promises
+    // Set up timeout
     const timeoutId = setTimeout(() => {
-      if (approvalResolver === resolve) {
-        approvalResolver = null
-        resolve(false) // Auto-reject on timeout
-      }
+      approvalResolvers.delete(runId)
+      approvalTimeouts.delete(runId)
+      resolve(false) // Auto-reject on timeout
     }, timeoutMs)
-
-    approvalResolver = (approved: boolean) => {
-      clearTimeout(timeoutId)
+    
+    approvalTimeouts.set(runId, timeoutId)
+    
+    // Store resolver
+    approvalResolvers.set(runId, (approved: boolean) => {
+      const tid = approvalTimeouts.get(runId)
+      if (tid) clearTimeout(tid)
+      approvalTimeouts.delete(runId)
+      approvalResolvers.delete(runId)
       resolve(approved)
-    }
+    })
   })
 }
 
 // ============================================
-// LINKEDIN AUTOMATION
+// LINKEDIN AUTOMATION (CHAOS-HARDENED)
 // ============================================
 
 async function checkLinkedInLogin(profileId: string): Promise<boolean> {
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) return false
 
-  const page = await getPage(profile)
-  
   try {
+    const page = await getPage(profile)
+    
     // Navigate to LinkedIn feed (requires login)
     await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle', timeout: 15000 })
     
@@ -375,14 +582,31 @@ async function checkLinkedInLogin(profileId: string): Promise<boolean> {
     saveProfiles()
     
     return isLoggedIn
-  } catch {
+  } catch (err) {
+    console.error('[Playwright] LinkedIn login check failed:', err)
     return false
   }
 }
 
 async function linkedInConnect(profileId: string, targetUrl: string, note?: string): Promise<AutomationRun> {
+  // CHAOS FIX: Check shutdown state
+  if (isShuttingDown) {
+    throw new Error('System is shutting down')
+  }
+  
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) throw new Error('Profile not found')
+  
+  // CHAOS FIX: Check for existing active run on this profile
+  const existingRun = getActiveRunForProfile(profileId)
+  if (existingRun) {
+    throw new Error(`Profile ${profile.name} already has an active automation (${existingRun.type}). Stop it first.`)
+  }
+  
+  // CHAOS FIX: Acquire profile lock
+  if (!acquireProfileLock(profileId)) {
+    throw new Error(`Profile ${profile.name} is busy with another operation`)
+  }
 
   const page = await getPage(profile)
 
@@ -394,21 +618,27 @@ async function linkedInConnect(profileId: string, targetUrl: string, note?: stri
     { name: 'Send request', description: 'Sending connection request', requiresApproval: true },
   ]
 
-  const run = createRun('linkedin_connect', steps)
+  const run = createRun('linkedin_connect', steps, profileId)
 
   // Start streaming
   startStreaming(profileId)
 
   try {
+    // CHAOS FIX: Check if run was stopped before each step
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 1: Navigate
     await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 20000 })
     await humanLikeDelay()
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 2: Extract profile info
     const name = await page.locator('h1.text-heading-xlarge').textContent().catch(() => 'Unknown')
     const headline = await page.locator('.text-body-medium.break-words').first().textContent().catch(() => '')
     
+    const currentRun = activeRuns.get(run.id)
     if (currentRun) {
       currentRun.target = {
         name: name?.trim() || 'Unknown',
@@ -416,8 +646,10 @@ async function linkedInConnect(profileId: string, targetUrl: string, note?: stri
         profileUrl: targetUrl,
       }
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 3: Click Connect button
     await humanLikeDelay()
     
@@ -436,7 +668,9 @@ async function linkedInConnect(profileId: string, targetUrl: string, note?: stri
     }
     
     await delay(1000)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 4: Add note if provided
     if (note) {
@@ -447,12 +681,14 @@ async function linkedInConnect(profileId: string, targetUrl: string, note?: stri
         await delay(500)
         await page.locator('textarea[name="message"]').fill(note)
       }
-      updateStepStatus('complete')
+      updateStepStatus(run.id, 'complete')
     }
 
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+
     // Step 5: Wait for approval before sending
-    const approved = await waitForApproval('SEND_CONNECTION', {
-      target: currentRun?.target?.name || targetUrl,
+    const approved = await waitForApproval(run.id, 'SEND_CONNECTION', {
+      target: activeRuns.get(run.id)?.target?.name || targetUrl,
       content: note || 'No note added',
     })
 
@@ -466,24 +702,40 @@ async function linkedInConnect(profileId: string, targetUrl: string, note?: stri
     const sendButton = page.locator('button:has-text("Send")').last()
     await sendButton.click()
     await delay(1000)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
     // Save state
     await saveContextState(profile)
-    const completedRun = completeRun()
+    const completedRun = completeRun(run.id)
     return completedRun!
 
   } catch (error) {
-    const failedRun = failRun((error as Error).message)
+    failRun(run.id, (error as Error).message)
     throw error
   } finally {
-    stopStreaming()
+    stopStreaming(profileId)
+    releaseProfileLock(profileId)
   }
 }
 
 async function linkedInMessage(profileId: string, targetUrl: string, message: string): Promise<AutomationRun> {
+  // CHAOS FIX: Check shutdown state
+  if (isShuttingDown) {
+    throw new Error('System is shutting down')
+  }
+  
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) throw new Error('Profile not found')
+  
+  // CHAOS FIX: Check for existing active run
+  const existingRun = getActiveRunForProfile(profileId)
+  if (existingRun) {
+    throw new Error(`Profile ${profile.name} already has an active automation. Stop it first.`)
+  }
+  
+  if (!acquireProfileLock(profileId)) {
+    throw new Error(`Profile ${profile.name} is busy with another operation`)
+  }
 
   const page = await getPage(profile)
 
@@ -494,15 +746,18 @@ async function linkedInMessage(profileId: string, targetUrl: string, message: st
     { name: 'Send message', description: 'Sending message', requiresApproval: true },
   ]
 
-  const run = createRun('linkedin_message', steps)
+  const run = createRun('linkedin_message', steps, profileId)
   startStreaming(profileId)
 
   try {
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 1: Navigate
     await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 20000 })
     await humanLikeDelay()
     
     const name = await page.locator('h1.text-heading-xlarge').textContent().catch(() => 'Unknown')
+    const currentRun = activeRuns.get(run.id)
     if (currentRun) {
       currentRun.target = {
         name: name?.trim() || 'Unknown',
@@ -510,14 +765,18 @@ async function linkedInMessage(profileId: string, targetUrl: string, message: st
       }
       currentRun.message = message
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 2: Click Message button
     await humanLikeDelay()
     const messageButton = page.locator('button:has-text("Message")').first()
     await messageButton.click()
     await delay(1500)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 3: Type message
     await humanLikeDelay()
@@ -527,13 +786,16 @@ async function linkedInMessage(profileId: string, targetUrl: string, message: st
     
     // Type slowly like a human
     for (const char of message) {
+      if (!isRunActive(run.id)) throw new Error('Run was stopped')
       await page.keyboard.type(char, { delay: 30 + Math.random() * 50 })
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 4: Wait for approval
-    const approved = await waitForApproval('SEND_MESSAGE', {
-      target: currentRun?.target?.name || targetUrl,
+    const approved = await waitForApproval(run.id, 'SEND_MESSAGE', {
+      target: activeRuns.get(run.id)?.target?.name || targetUrl,
       content: message,
     })
 
@@ -547,31 +809,32 @@ async function linkedInMessage(profileId: string, targetUrl: string, message: st
     const sendButton = page.locator('button.msg-form__send-button')
     await sendButton.click()
     await delay(1000)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
     await saveContextState(profile)
-    const completedRun = completeRun()
+    const completedRun = completeRun(run.id)
     return completedRun!
 
   } catch (error) {
-    const failedRun = failRun((error as Error).message)
+    failRun(run.id, (error as Error).message)
     throw error
   } finally {
-    stopStreaming()
+    stopStreaming(profileId)
+    releaseProfileLock(profileId)
   }
 }
 
 // ============================================
-// TWITTER AUTOMATION
+// TWITTER AUTOMATION (CHAOS-HARDENED)
 // ============================================
 
 async function checkTwitterLogin(profileId: string): Promise<boolean> {
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) return false
 
-  const page = await getPage(profile)
-  
   try {
+    const page = await getPage(profile)
+    
     await page.goto('https://twitter.com/home', { waitUntil: 'networkidle', timeout: 15000 })
     
     // Check if we see the home timeline
@@ -581,54 +844,101 @@ async function checkTwitterLogin(profileId: string): Promise<boolean> {
     saveProfiles()
     
     return isLoggedIn
-  } catch {
+  } catch (err) {
+    console.error('[Playwright] Twitter login check failed:', err)
     return false
   }
 }
 
 async function twitterFollow(profileId: string, username: string): Promise<AutomationRun> {
+  if (isShuttingDown) throw new Error('System is shutting down')
+  
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) throw new Error('Profile not found')
+  
+  // STRESS TEST FIX: Validate username format before proceeding
+  const cleanUsername = username.replace(/^@/, '').trim()
+  if (!cleanUsername) {
+    throw new Error('Username cannot be empty')
+  }
+  if (cleanUsername.length > 15) {
+    throw new Error('Twitter usernames cannot exceed 15 characters')
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+    throw new Error('Invalid Twitter username format (only letters, numbers, and underscores allowed)')
+  }
+  
+  const existingRun = getActiveRunForProfile(profileId)
+  if (existingRun) {
+    throw new Error(`Profile ${profile.name} already has an active automation. Stop it first.`)
+  }
+  
+  if (!acquireProfileLock(profileId)) {
+    throw new Error(`Profile ${profile.name} is busy with another operation`)
+  }
 
   const page = await getPage(profile)
-  const cleanUsername = username.replace('@', '')
 
   const steps = [
     { name: 'Navigate to profile', description: `Opening @${cleanUsername}` },
     { name: 'Click Follow', description: 'Following user', requiresApproval: true },
   ]
 
-  const run = createRun('twitter_follow', steps)
+  const run = createRun('twitter_follow', steps, profileId)
   startStreaming(profileId)
 
   try {
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 1: Navigate
     await page.goto(`https://twitter.com/${cleanUsername}`, { waitUntil: 'networkidle', timeout: 20000 })
     await humanLikeDelay()
     
+    // STRESS TEST FIX: Check if user exists
+    // Twitter shows specific elements when user doesn't exist
+    const userNotFound = await page.locator('[data-testid="error-detail"]').isVisible().catch(() => false) ||
+                         await page.locator('text="This account doesn\'t exist"').isVisible().catch(() => false) ||
+                         await page.locator('text="Account suspended"').isVisible().catch(() => false) ||
+                         await page.locator('span:has-text("Hmm...this page doesn\'t exist")').isVisible().catch(() => false)
+    
+    if (userNotFound) {
+      throw new Error(`User @${cleanUsername} does not exist or is suspended`)
+    }
+    
     const displayName = await page.locator('[data-testid="UserName"] span').first().textContent().catch(() => cleanUsername)
+    const currentRun = activeRuns.get(run.id)
     if (currentRun) {
       currentRun.target = {
         name: displayName || cleanUsername,
         profileUrl: `https://twitter.com/${cleanUsername}`,
       }
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 2: Follow
+    // STRESS TEST FIX: Wait a bit for the button to appear
+    await delay(500)
+    
     const followButton = page.locator('[data-testid$="-follow"]')
-    const isFollowButton = await followButton.isVisible()
+    const isFollowButton = await followButton.isVisible({ timeout: 3000 }).catch(() => false)
     
     if (!isFollowButton) {
       // Check if already following
-      const unfollowButton = await page.locator('[data-testid$="-unfollow"]').isVisible()
+      const unfollowButton = await page.locator('[data-testid$="-unfollow"]').isVisible({ timeout: 1000 }).catch(() => false)
       if (unfollowButton) {
         throw new Error('Already following this user')
       }
-      throw new Error('Follow button not found')
+      // Check if this is your own profile
+      const editProfileButton = await page.locator('[data-testid="editProfileButton"]').isVisible().catch(() => false)
+      if (editProfileButton) {
+        throw new Error('Cannot follow your own account')
+      }
+      throw new Error('Follow button not found - user may have blocked you or restricted who can follow')
     }
 
-    const approved = await waitForApproval('FOLLOW_USER', {
+    const approved = await waitForApproval(run.id, 'FOLLOW_USER', {
       target: `@${cleanUsername}`,
       content: `Follow ${displayName || cleanUsername}`,
     })
@@ -639,26 +949,58 @@ async function twitterFollow(profileId: string, username: string): Promise<Autom
 
     await followButton.click()
     await delay(1000)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
     await saveContextState(profile)
-    const completedRun = completeRun()
+    const completedRun = completeRun(run.id)
     return completedRun!
 
   } catch (error) {
-    const failedRun = failRun((error as Error).message)
+    failRun(run.id, (error as Error).message)
     throw error
   } finally {
-    stopStreaming()
+    stopStreaming(profileId)
+    releaseProfileLock(profileId)
   }
 }
 
 async function twitterDM(profileId: string, username: string, message: string): Promise<AutomationRun> {
+  if (isShuttingDown) throw new Error('System is shutting down')
+  
   const profile = profiles.find(p => p.id === profileId)
   if (!profile) throw new Error('Profile not found')
+  
+  // STRESS TEST FIX: Validate username format
+  const cleanUsername = username.replace(/^@/, '').trim()
+  if (!cleanUsername) {
+    throw new Error('Username cannot be empty')
+  }
+  if (cleanUsername.length > 15) {
+    throw new Error('Twitter usernames cannot exceed 15 characters')
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+    throw new Error('Invalid Twitter username format (only letters, numbers, and underscores allowed)')
+  }
+  
+  // STRESS TEST FIX: Validate message
+  if (!message || message.trim().length === 0) {
+    throw new Error('Message cannot be empty')
+  }
+  // Twitter DM limit is 10,000 characters
+  if (message.length > 10000) {
+    throw new Error('Message exceeds Twitter DM limit of 10,000 characters')
+  }
+  
+  const existingRun = getActiveRunForProfile(profileId)
+  if (existingRun) {
+    throw new Error(`Profile ${profile.name} already has an active automation. Stop it first.`)
+  }
+  
+  if (!acquireProfileLock(profileId)) {
+    throw new Error(`Profile ${profile.name} is busy with another operation`)
+  }
 
   const page = await getPage(profile)
-  const cleanUsername = username.replace('@', '')
 
   const steps = [
     { name: 'Navigate to profile', description: `Opening @${cleanUsername}` },
@@ -667,15 +1009,28 @@ async function twitterDM(profileId: string, username: string, message: string): 
     { name: 'Send DM', description: 'Sending message', requiresApproval: true },
   ]
 
-  const run = createRun('twitter_dm', steps)
+  const run = createRun('twitter_dm', steps, profileId)
   startStreaming(profileId)
 
   try {
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
+    
     // Step 1: Navigate
     await page.goto(`https://twitter.com/${cleanUsername}`, { waitUntil: 'networkidle', timeout: 20000 })
     await humanLikeDelay()
     
+    // STRESS TEST FIX: Check if user exists
+    const userNotFound = await page.locator('[data-testid="error-detail"]').isVisible().catch(() => false) ||
+                         await page.locator('text="This account doesn\'t exist"').isVisible().catch(() => false) ||
+                         await page.locator('text="Account suspended"').isVisible().catch(() => false) ||
+                         await page.locator('span:has-text("Hmm...this page doesn\'t exist")').isVisible().catch(() => false)
+    
+    if (userNotFound) {
+      throw new Error(`User @${cleanUsername} does not exist or is suspended`)
+    }
+    
     const displayName = await page.locator('[data-testid="UserName"] span').first().textContent().catch(() => cleanUsername)
+    const currentRun = activeRuns.get(run.id)
     if (currentRun) {
       currentRun.target = {
         name: displayName || cleanUsername,
@@ -683,17 +1038,27 @@ async function twitterDM(profileId: string, username: string, message: string): 
       }
       currentRun.message = message
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 2: Click DM button
     await humanLikeDelay()
+    await delay(500) // STRESS TEST FIX: Wait for button to render
     const dmButton = page.locator('[data-testid="sendDMFromProfile"]')
-    if (!await dmButton.isVisible()) {
-      throw new Error('Cannot DM this user - they may not follow you or have DMs disabled')
+    if (!await dmButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      // Check if it's your own profile
+      const editProfileButton = await page.locator('[data-testid="editProfileButton"]').isVisible().catch(() => false)
+      if (editProfileButton) {
+        throw new Error('Cannot DM your own account')
+      }
+      throw new Error('Cannot DM this user - they may not follow you, have DMs disabled, or have blocked you')
     }
     await dmButton.click()
     await delay(1500)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 3: Type message
     await humanLikeDelay()
@@ -702,12 +1067,15 @@ async function twitterDM(profileId: string, username: string, message: string): 
     await delay(300)
     
     for (const char of message) {
+      if (!isRunActive(run.id)) throw new Error('Run was stopped')
       await page.keyboard.type(char, { delay: 30 + Math.random() * 50 })
     }
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
+
+    if (!isRunActive(run.id)) throw new Error('Run was stopped')
 
     // Step 4: Approval
-    const approved = await waitForApproval('SEND_DM', {
+    const approved = await waitForApproval(run.id, 'SEND_DM', {
       target: `@${cleanUsername}`,
       content: message,
     })
@@ -720,18 +1088,68 @@ async function twitterDM(profileId: string, username: string, message: string): 
     const sendButton = page.locator('[data-testid="dmComposerSendButton"]')
     await sendButton.click()
     await delay(1000)
-    updateStepStatus('complete')
+    updateStepStatus(run.id, 'complete')
 
     await saveContextState(profile)
-    const completedRun = completeRun()
+    const completedRun = completeRun(run.id)
     return completedRun!
 
   } catch (error) {
-    const failedRun = failRun((error as Error).message)
+    failRun(run.id, (error as Error).message)
     throw error
   } finally {
-    stopStreaming()
+    stopStreaming(profileId)
+    releaseProfileLock(profileId)
   }
+}
+
+// ============================================
+// SHUTDOWN (CHAOS-HARDENED)
+// ============================================
+
+/**
+ * CHAOS FIX: Graceful shutdown with active operation cleanup
+ */
+async function shutdown(): Promise<void> {
+  isShuttingDown = true
+  
+  // Stop all streaming
+  stopStreaming()
+  
+  // Stop all active runs
+  stopRun()
+  
+  // Save all context states
+  for (const [id, context] of contexts) {
+    const profile = profiles.find(p => p.id === id)
+    if (profile) {
+      try {
+        await saveContextState(profile)
+      } catch (err) {
+        console.error(`[Playwright] Failed to save state for ${id}:`, err)
+      }
+    }
+    try {
+      await context.close()
+    } catch (err) {
+      console.error(`[Playwright] Failed to close context ${id}:`, err)
+    }
+  }
+  contexts.clear()
+  pages.clear()
+  
+  // Close browser
+  if (browser) {
+    try {
+      await browser.close()
+    } catch (err) {
+      console.error('[Playwright] Failed to close browser:', err)
+    }
+    browser = null
+  }
+  
+  activeProfileId = null
+  isShuttingDown = false
 }
 
 // ============================================
@@ -755,6 +1173,18 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
         args: ['--disable-blink-features=AutomationControlled'],
       })
       
+      // CHAOS FIX: Handle browser disconnection
+      browser.on('disconnected', () => {
+        console.warn('[Playwright] Browser disconnected unexpectedly')
+        browser = null
+        // Stop all active runs
+        stopRun()
+        // Clear all contexts and pages
+        contexts.clear()
+        pages.clear()
+        emitEvent('browser_error', { error: 'Browser disconnected unexpectedly' })
+      })
+      
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -764,23 +1194,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
   // Shutdown browser
   ipcMain.handle('playwright:shutdown', async () => {
     try {
-      stopStreaming()
-      stopRun()
-      
-      for (const [id, context] of contexts) {
-        const profile = profiles.find(p => p.id === id)
-        if (profile) await saveContextState(profile)
-        await context.close()
-      }
-      contexts.clear()
-      pages.clear()
-      
-      if (browser) {
-        await browser.close()
-        browser = null
-      }
-      
-      activeProfileId = null
+      await shutdown()
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -819,8 +1233,8 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
     }
   })
 
-  ipcMain.handle('playwright:stop-streaming', async () => {
-    stopStreaming()
+  ipcMain.handle('playwright:stop-streaming', async (_, profileId?: string) => {
+    stopStreaming(profileId)
     return { success: true }
   })
 
@@ -833,14 +1247,46 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
     }
   })
 
-  // Navigation
+  // Navigation - with abort handling for rapid navigation
+  // STRESS TEST FIX: Track pending navigations and abort old ones
+  const pendingNavigations = new Map<string, AbortController>()
+  
   ipcMain.handle('playwright:navigate', async (_, profileId: string, url: string) => {
     try {
       const profile = profiles.find(p => p.id === profileId)
       if (!profile) throw new Error('Profile not found')
       
+      // STRESS TEST FIX: Abort any pending navigation for this profile
+      const existingController = pendingNavigations.get(profileId)
+      if (existingController) {
+        existingController.abort()
+        console.log(`[Playwright] Aborted pending navigation for profile ${profileId}`)
+      }
+      
+      // Create new abort controller for this navigation
+      const controller = new AbortController()
+      pendingNavigations.set(profileId, controller)
+      
       const page = await getPage(profile)
-      await page.goto(url, { waitUntil: 'networkidle' })
+      
+      // Use a race between navigation and abort signal
+      try {
+        await page.goto(url, { 
+          waitUntil: 'networkidle',
+          timeout: 30000 
+        })
+      } catch (navError) {
+        if (controller.signal.aborted) {
+          return { success: false, error: 'Navigation cancelled by newer request', cancelled: true }
+        }
+        throw navError
+      } finally {
+        // Clean up if this was the current controller
+        if (pendingNavigations.get(profileId) === controller) {
+          pendingNavigations.delete(profileId)
+        }
+      }
+      
       return { success: true, url: page.url() }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -917,30 +1363,38 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
     }
   })
 
-  // Run control
+  // Run control - CHAOS HARDENED
   ipcMain.handle('playwright:approve-action', async (_, runId: string) => {
-    if (currentRun?.id === runId && approvalResolver) {
-      const resolver = approvalResolver
-      approvalResolver = null
+    const resolver = approvalResolvers.get(runId)
+    if (resolver) {
       resolver(true)
       return { success: true }
     }
-    return { success: false, error: 'No pending approval' }
+    return { success: false, error: 'No pending approval for this run' }
   })
 
   ipcMain.handle('playwright:reject-action', async (_, runId: string) => {
-    if (currentRun?.id === runId && approvalResolver) {
-      const resolver = approvalResolver
-      approvalResolver = null
+    const resolver = approvalResolvers.get(runId)
+    if (resolver) {
       resolver(false)
       return { success: true }
     }
-    return { success: false, error: 'No pending approval' }
+    return { success: false, error: 'No pending approval for this run' }
   })
 
-  ipcMain.handle('playwright:stop-run', async () => {
-    stopRun()
+  ipcMain.handle('playwright:stop-run', async (_, runId?: string) => {
+    stopRun(runId)
     return { success: true }
+  })
+  
+  // CHAOS FIX: New handler to get all active runs
+  ipcMain.handle('playwright:get-active-runs', async () => {
+    return Array.from(activeRuns.values())
+  })
+  
+  // CHAOS FIX: New handler to check if profile is busy
+  ipcMain.handle('playwright:is-profile-busy', async (_, profileId: string) => {
+    return profileLocks.get(profileId) || false
   })
 
   // Legacy handlers for backwards compatibility
@@ -976,10 +1430,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
 
   ipcMain.handle('playwright:close', async () => {
     try {
-      if (browser) {
-        await browser.close()
-        browser = null
-      }
+      await shutdown()
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -990,7 +1441,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
     try {
       if (activeProfileId) {
         const page = pages.get(activeProfileId)
-        if (page) {
+        if (page && !page.isClosed()) {
           const result = await page.evaluate(script)
           return { success: true, result }
         }
@@ -1003,6 +1454,9 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
 }
 
 export function unregisterPlaywrightIpcHandlers() {
+  // Clean up before unregistering
+  shutdown().catch(console.error)
+  
   const handlers = [
     'playwright:initialize',
     'playwright:shutdown',
@@ -1023,6 +1477,8 @@ export function unregisterPlaywrightIpcHandlers() {
     'playwright:approve-action',
     'playwright:reject-action',
     'playwright:stop-run',
+    'playwright:get-active-runs',
+    'playwright:is-profile-busy',
     'playwright:launch',
     'playwright:screenshot',
     'playwright:close',

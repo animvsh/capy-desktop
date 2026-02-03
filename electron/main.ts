@@ -7,6 +7,7 @@ import { registerBrowserIpcHandlers, unregisterBrowserIpcHandlers } from '../ele
 const store = new Store()
 
 let mainWindow: BrowserWindow | null = null
+let isQuitting = false  // CHAOS FIX: Track if app is quitting
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -41,11 +42,37 @@ function createWindow() {
     mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
 
+  // CHAOS FIX: Handle close events gracefully
+  mainWindow.on('close', (event) => {
+    // On macOS, prevent window close from quitting app unless explicitly quitting
+    if (process.platform === 'darwin' && !isQuitting) {
+      event.preventDefault()
+      mainWindow?.hide()
+      return
+    }
+  })
+
   mainWindow.on('closed', () => {
-    // Cleanup IPC handlers
+    // Cleanup IPC handlers - this will also clean up any active automations
     unregisterBrowserIpcHandlers()
     unregisterPlaywrightIpcHandlers()
     mainWindow = null
+  })
+  
+  // CHAOS FIX: Handle renderer crashes
+  mainWindow.webContents.on('crashed', () => {
+    console.error('[Main] Renderer process crashed')
+    // Clean up automation state
+    unregisterPlaywrightIpcHandlers()
+  })
+  
+  // CHAOS FIX: Handle unresponsive renderer
+  mainWindow.on('unresponsive', () => {
+    console.warn('[Main] Window became unresponsive')
+  })
+  
+  mainWindow.on('responsive', () => {
+    console.log('[Main] Window is responsive again')
   })
 }
 
@@ -71,7 +98,10 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    // CHAOS FIX: On macOS, re-show window instead of creating new one
+    if (mainWindow) {
+      mainWindow.show()
+    } else if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
     }
   })
@@ -81,4 +111,24 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// CHAOS FIX: Handle before-quit to set quitting flag
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
+// CHAOS FIX: Handle uncaught exceptions in main process
+process.on('uncaughtException', (error) => {
+  console.error('[Main] Uncaught exception:', error)
+  // Try to clean up gracefully
+  try {
+    unregisterPlaywrightIpcHandlers()
+  } catch {
+    // Ignore cleanup errors
+  }
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Main] Unhandled rejection at:', promise, 'reason:', reason)
 })

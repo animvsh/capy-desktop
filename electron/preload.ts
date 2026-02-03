@@ -105,7 +105,11 @@ contextBridge.exposeInMainWorld('playwright', {
     ipcRenderer.invoke('playwright:approve-action', runId),
   rejectAction: (runId: string) => 
     ipcRenderer.invoke('playwright:reject-action', runId),
-  stopRun: () => ipcRenderer.invoke('playwright:stop-run'),
+  stopRun: (runId?: string) => ipcRenderer.invoke('playwright:stop-run', runId),
+  
+  // CHAOS FIX: New methods for better state management
+  getActiveRuns: () => ipcRenderer.invoke('playwright:get-active-runs'),
+  isProfileBusy: (profileId: string) => ipcRenderer.invoke('playwright:is-profile-busy', profileId),
 
   // Generic Navigation
   navigate: (profileId: string, url: string) => 
@@ -151,7 +155,9 @@ declare global {
       twitterDM: (profileId: string, username: string, message: string) => Promise<any>;
       approveAction: (runId: string) => Promise<any>;
       rejectAction: (runId: string) => Promise<any>;
-      stopRun: () => Promise<any>;
+      stopRun: (runId?: string) => Promise<any>;
+      getActiveRuns: () => Promise<any[]>;
+      isProfileBusy: (profileId: string) => Promise<boolean>;
       navigate: (profileId: string, url: string) => Promise<any>;
       onEvent: (callback: (event: any) => void) => () => void;
     };
