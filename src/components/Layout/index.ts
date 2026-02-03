@@ -1,2 +1,3 @@
-export { Layout, type ViewMode } from './Layout';
-export { default } from './Layout';
+export { NewAppLayout } from './NewAppLayout';
+export { ChatSidebar } from './ChatSidebar';
+export { MainContent } from './MainContent';

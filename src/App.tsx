@@ -1,195 +1,85 @@
-import React, { useState, useEffect } from 'react';
-import { Layout, ViewMode } from './components/Layout';
-import { NavItem } from './components/Sidebar';
-import { Chat, Message } from './components/Chat';
-import { LiveControl, Step, ExtractedData, PolicyStatus } from './components/LiveControl';
-import { AuthGuard } from './components/Auth';
-import { useAuthStore } from './stores/authStore';
-import { generateId } from './lib/utils';
+import React, { Suspense, lazy } from "react";
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/hooks/useAuth";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { PageLoader } from "@/components/PageLoader";
 
-// Demo data
-const demoSteps: Step[] = [
-  { id: '1', label: 'Open LinkedIn profile', status: 'completed', duration: 1200 },
-  { id: '2', label: 'Extract contact info', status: 'completed', duration: 800 },
-  { id: '3', label: 'Generate personalized message', status: 'running' },
-  { id: '4', label: 'Review & send connection request', status: 'pending' },
-];
+// Feature flag for new layout
+// Set to true to use the new chat-first interface at /app
+// The old dashboard remains available at /dashboard
+const USE_NEW_LAYOUT = true;
 
-const demoExtractedData: ExtractedData = {
-  name: 'Sarah Chen',
-  company: 'Stripe',
-  role: 'Head of Product',
-  email: 'sarah.chen@stripe.com',
-};
+// Auth pages
+const Auth = lazy(() => import("./pages/Auth"));
 
-const demoPolicyStatus: PolicyStatus = {
-  dailyLimit: 50,
-  dailyUsed: 23,
-  windowActive: true,
-  risks: [],
-};
+// New layout (chat sidebar + tabbed panels) - this is the main app
+const NewAppLayout = lazy(() => import("./components/layout/NewAppLayout"));
 
-// Main app content (protected by auth)
-function AppContent() {
-  const [activeNav, setActiveNav] = useState<NavItem>('chat');
-  const [viewMode, setViewMode] = useState<ViewMode>('split');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: 'Hi! I\'m ready to help you with lead outreach. What would you like to do today?',
-      timestamp: new Date(Date.now() - 60000),
+// Support pages
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const BookingPage = lazy(() => import("./pages/BookingPage"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        // Don't retry on rate limit or payment errors
+        if (error instanceof Error) {
+          const message = error.message.toLowerCase();
+          if (message.includes("429") || message.includes("402")) {
+            return false;
+          }
+        }
+        return failureCount < 3;
+      },
+      staleTime: 30000,
+      refetchOnWindowFocus: false, // Prevent refetch when switching tabs (causes scroll reset)
     },
-  ]);
-  const [isTyping, setIsTyping] = useState(false);
-  const [isRunning, setIsRunning] = useState(true);
-  const [isPaused, setIsPaused] = useState(false);
+  },
+});
 
-  const handleSendMessage = (content: string) => {
-    const userMessage: Message = {
-      id: generateId(),
-      role: 'user',
-      content,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
+const App = () => (
+  <ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <HashRouter>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
+                {/* Landing redirects to app - NewAppLayout handles auth gating */}
+                <Route path="/" element={<Navigate to="/app" replace />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
 
-    // Simulate AI response
-    setIsTyping(true);
-    setTimeout(() => {
-      const assistantMessage: Message = {
-        id: generateId(),
-        role: 'assistant',
-        content: 'I\'ll start working on that right away. You can watch the progress in the live control pane on the right.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setIsTyping(false);
-    }, 1500);
-  };
+                {/* Main app route - chat sidebar + tabbed panels */}
+                <Route path="/app" element={<NewAppLayout />} />
+                <Route path="/dashboard" element={<NewAppLayout />} />
+                
+                {/* Booking page for external users */}
+                <Route path="/book/:slug" element={<BookingPage />} />
+                
+                {/* Legacy routes redirect to app */}
+                <Route path="/leads" element={<Navigate to="/app" replace />} />
+                <Route path="/conversations/:id" element={<Navigate to="/app" replace />} />
+                <Route path="/settings" element={<Navigate to="/app" replace />} />
+                
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </HashRouter>
+        </TooltipProvider>
+      </AuthProvider>
+    </QueryClientProvider>
+  </ErrorBoundary>
+);
 
-  const handlePause = () => setIsPaused(true);
-  const handleResume = () => setIsPaused(false);
-  const handleStop = () => {
-    setIsRunning(false);
-    setIsPaused(false);
-  };
-  const handleTakeOver = () => {
-    console.log('Taking over control...');
-  };
-
-  // Render different content based on active nav
-  const renderContent = () => {
-    switch (activeNav) {
-      case 'chat':
-        return null; // Uses chatPane and controlPane
-      case 'runs':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Runs view coming soon...</p>
-          </div>
-        );
-      case 'campaigns':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Campaigns view coming soon...</p>
-          </div>
-        );
-      case 'browser':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Browser view coming soon...</p>
-          </div>
-        );
-      case 'leads':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Leads view coming soon...</p>
-          </div>
-        );
-      case 'inbox':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Inbox view coming soon...</p>
-          </div>
-        );
-      case 'templates':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Templates view coming soon...</p>
-          </div>
-        );
-      case 'logs':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Logs view coming soon...</p>
-          </div>
-        );
-      case 'settings':
-        return (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-500">Settings view coming soon...</p>
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
-
-  const showSplitView = activeNav === 'chat';
-
-  return (
-    <Layout
-      activeNav={activeNav}
-      onNavigate={setActiveNav}
-      viewMode={viewMode}
-      onViewModeChange={setViewMode}
-      chatPane={
-        showSplitView ? (
-          <Chat
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isTyping={isTyping}
-          />
-        ) : undefined
-      }
-      controlPane={
-        showSplitView ? (
-          <LiveControl
-            url="https://linkedin.com/in/sarah-chen"
-            pageTitle="Sarah Chen | LinkedIn"
-            steps={demoSteps}
-            currentStepId="3"
-            extractedData={demoExtractedData}
-            draftMessage="Hi Sarah, I noticed your work on Stripe's API platform is impressive. I'd love to connect and discuss..."
-            policyStatus={demoPolicyStatus}
-            isRunning={isRunning}
-            isPaused={isPaused}
-            onPause={handlePause}
-            onResume={handleResume}
-            onStop={handleStop}
-            onTakeOver={handleTakeOver}
-          />
-        ) : undefined
-      }
-    >
-      {!showSplitView && renderContent()}
-    </Layout>
-  );
-}
-
-// Root App component with auth guard
-export default function App() {
-  const initialize = useAuthStore((state) => state.initialize);
-
-  // Initialize auth on mount
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
-
-  return (
-    <AuthGuard>
-      <AppContent />
-    </AuthGuard>
-  );
-}
+export default App;
