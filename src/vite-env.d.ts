@@ -88,16 +88,17 @@ interface PlaywrightAPI {
   onEvent: (callback: (event: AutomationEvent) => void) => () => void;
 }
 
-declare global {
-  interface Window {
-    playwright?: PlaywrightAPI;
-    electronBrowser?: any;
-    electron?: {
-      platform: NodeJS.Platform;
-      invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
-      send: (channel: string, ...args: unknown[]) => void;
-      on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
-      once: (channel: string, callback: (...args: unknown[]) => void) => void;
-    };
-  }
+interface ElectronBrowserAPI {
+  platform: NodeJS.Platform;
+  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
+  send: (channel: string, ...args: unknown[]) => void;
+  on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+  once: (channel: string, callback: (...args: unknown[]) => void) => void;
+}
+
+// Augment the Window interface globally
+interface Window {
+  playwright?: PlaywrightAPI;
+  electronBrowser?: any;
+  electron?: ElectronBrowserAPI;
 }
