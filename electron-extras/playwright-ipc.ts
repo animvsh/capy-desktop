@@ -11,9 +11,22 @@
  */
 
 import { BrowserWindow, ipcMain, app } from 'electron'
-import { chromium, Browser, BrowserContext, Page } from 'playwright-core'
+// Lazy-load playwright-core to avoid chromium-bidi bundling issues
+// Types only - no runtime import
+import type { Browser, BrowserContext, Page, ChromiumBrowser } from 'playwright-core'
 import { join } from 'path'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
+
+// Lazy-loaded playwright chromium launcher
+let playwrightChromium: typeof import('playwright-core').chromium | null = null
+
+async function getChromium() {
+  if (!playwrightChromium) {
+    const pw = await import('playwright-core')
+    playwrightChromium = pw.chromium
+  }
+  return playwrightChromium
+}
 
 // ============================================
 // TYPES
@@ -736,6 +749,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
         return { success: true, message: 'Already initialized' }
       }
       
+      const chromium = await getChromium()
       browser = await chromium.launch({
         headless: false,
         args: ['--disable-blink-features=AutomationControlled'],
@@ -936,6 +950,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
         return { success: true, message: 'Browser already launched' }
       }
       
+      const chromium = await getChromium()
       browser = await chromium.launch({
         headless: options?.headless ?? false,
         args: ['--disable-blink-features=AutomationControlled'],
