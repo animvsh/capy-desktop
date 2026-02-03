@@ -7,11 +7,14 @@
  * - "Go to settings" → navigates to Settings panel
  * - "Find emails from John" → searches emails and navigates
  * - "What am I looking at?" → describes current context
+ * - "Connect with John on LinkedIn" → browser automation
+ * - "Follow @username on Twitter" → browser automation
  */
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useApp, PanelType } from '@/contexts/AppContext';
 import { useToast } from './use-toast';
+import { detectBrowserCommand, useBrowserAutomation } from './useBrowserAutomation';
 
 // ============================================
 // TYPES
@@ -78,6 +81,27 @@ const BOOKING_LINK_PATTERNS = [
   /\blet\s+(people|someone)\s+schedule\s+with\s+me/i,
 ];
 
+// Browser automation patterns - used to detect if this is a browser command
+const BROWSER_AUTOMATION_PATTERNS = [
+  // LinkedIn
+  /\bconnect\s+(?:with\s+)?(.+?)(?:\s+on\s+linkedin)?$/i,
+  /\bsend\s+(?:a\s+)?connection\s+(?:request\s+)?to\s+/i,
+  /\blinkedin\s+connect/i,
+  /\badd\s+(.+?)\s+on\s+linkedin/i,
+  /\bmessage\s+(.+?)\s+on\s+linkedin/i,
+  /\bsend\s+(?:a\s+)?message\s+to\s+(.+?)\s+on\s+linkedin/i,
+  // Twitter
+  /\bfollow\s+@?(.+?)(?:\s+on\s+twitter|\s+on\s+x)?$/i,
+  /\btwitter\s+follow/i,
+  /\bdm\s+@?(.+?)\s+(?:on\s+twitter)?/i,
+  /\bsend\s+(?:a\s+)?dm\s+to\s+@?(.+)/i,
+  // Generic browser
+  /\b(?:go\s+to|open|navigate\s+to|browse\s+to|visit)\s+(https?:\/\/[^\s]+)/i,
+  /\bopen\s+browser/i,
+  /\bstart\s+browser\s+automation/i,
+  /\bshow\s+(?:me\s+)?(?:the\s+)?browser/i,
+];
+
 // ============================================
 // HOOK IMPLEMENTATION
 // ============================================
@@ -92,6 +116,10 @@ export function useChatAssistant() {
     navigateTo,
     searchAndNavigate,
   } = useApp();
+
+  // Browser automation hook
+  const browserAutomation = useBrowserAutomation();
+  const [isBrowserProcessing, setIsBrowserProcessing] = useState(false);
 
   /**
    * Check if a message is a local command
@@ -127,6 +155,17 @@ export function useChatAssistant() {
     // Booking link commands
     for (const pattern of BOOKING_LINK_PATTERNS) {
       if (pattern.test(message)) return true;
+    }
+
+    // Browser automation commands
+    for (const pattern of BROWSER_AUTOMATION_PATTERNS) {
+      if (pattern.test(message)) return true;
+    }
+
+    // Also check using the browser command detector
+    const browserCommand = detectBrowserCommand(message);
+    if (browserCommand && browserCommand.confidence > 0.7) {
+      return true;
     }
 
     return false;
@@ -294,6 +333,57 @@ export function useChatAssistant() {
   }, [setActivePanel]);
 
   /**
+   * Process browser automation command
+   */
+  const processBrowserCommand = useCallback(async (message: string): Promise<CommandResult> => {
+    const command = detectBrowserCommand(message);
+    
+    if (!command || command.confidence < 0.7) {
+      return { handled: false };
+    }
+
+    // Check if running in Electron
+    const isElectron = typeof window !== 'undefined' && !!(window as any).playwright;
+    if (!isElectron) {
+      return {
+        handled: true,
+        message: 'Browser automation requires the desktop app. Please download and use the Capy desktop app for LinkedIn and Twitter automation.',
+      };
+    }
+
+    setIsBrowserProcessing(true);
+    try {
+      // Initialize browser if needed
+      if (!browserAutomation.isInitialized) {
+        await browserAutomation.initialize();
+      }
+
+      // Execute the command
+      const result = await browserAutomation.executeCommand(message);
+      
+      // Navigate to the appropriate panel to show live view
+      if (command.platform === 'linkedin') {
+        setActivePanel('linkedin');
+      } else if (command.platform === 'twitter') {
+        // Twitter panel if exists, otherwise stay on current
+        // setActivePanel('twitter');
+      }
+
+      return {
+        handled: true,
+        message: result.message,
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        message: `Browser automation failed: ${(error as Error).message}`,
+      };
+    } finally {
+      setIsBrowserProcessing(false);
+    }
+  }, [browserAutomation, setActivePanel]);
+
+  /**
    * Process a local command
    * Returns true if the command was handled locally
    */
@@ -360,12 +450,34 @@ export function useChatAssistant() {
       }
     }
 
+    // Try browser automation commands
+    const browserCommand = detectBrowserCommand(message);
+    if (browserCommand && browserCommand.confidence >= 0.7) {
+      const browserResult = await processBrowserCommand(message);
+      if (browserResult.handled) {
+        if (browserResult.message) {
+          toast({ 
+            title: browserResult.message,
+            description: browserCommand.platform === 'linkedin' 
+              ? 'Check the LinkedIn panel for live view'
+              : browserCommand.platform === 'twitter'
+                ? 'Check the Twitter panel for live view'
+                : undefined,
+          });
+        }
+        return true;
+      }
+    }
+
     return false;
-  }, [processNavigationCommand, processEmailSearchCommand, processContextQuery, processSetupCommand, processCalendarCommand, processBookingLinkCommand, toast]);
+  }, [processNavigationCommand, processEmailSearchCommand, processContextQuery, processSetupCommand, processCalendarCommand, processBookingLinkCommand, processBrowserCommand, toast]);
 
   return {
     isLocalCommand,
     processLocalCommand,
+    // Browser automation state
+    isBrowserProcessing,
+    browserAutomation,
   };
 }
 

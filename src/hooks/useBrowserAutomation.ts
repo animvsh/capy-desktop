@@ -213,6 +213,7 @@ export function useBrowserAutomation() {
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
   const [events, setEvents] = useState<AutomationEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   
   // Refs
   const eventListenerRef = useRef<(() => void) | null>(null);
@@ -412,17 +413,21 @@ export function useBrowserAutomation() {
   // LINKEDIN AUTOMATION
   // ============================================
 
-  const checkLinkedInLogin = useCallback(async (profileId: string) => {
+  const checkLinkedInLogin = useCallback(async (profileId?: string) => {
     if (!electron) return false;
+    const id = profileId || activeProfileId;
+    if (!id) return false;
 
     try {
-      const result = await electron.invoke('playwright:linkedin-check-login', profileId);
-      return result.success ? result.isLoggedIn : false;
+      const result = await electron.invoke('playwright:linkedin-check-login', id);
+      const loggedIn = result.success ? result.isLoggedIn : false;
+      setIsLoggedIn(loggedIn);
+      return loggedIn;
     } catch (err) {
       setError((err as Error).message);
       return false;
     }
-  }, [electron]);
+  }, [electron, activeProfileId]);
 
   const linkedInConnect = useCallback(async (targetUrl: string, note?: string) => {
     if (!electron) return null;
@@ -498,17 +503,75 @@ export function useBrowserAutomation() {
   // TWITTER AUTOMATION
   // ============================================
 
-  const checkTwitterLogin = useCallback(async (profileId: string) => {
+  const checkTwitterLogin = useCallback(async (profileId?: string) => {
     if (!electron) return false;
+    const id = profileId || activeProfileId;
+    if (!id) return false;
 
     try {
-      const result = await electron.invoke('playwright:twitter-check-login', profileId);
-      return result.success ? result.isLoggedIn : false;
+      const result = await electron.invoke('playwright:twitter-check-login', id);
+      const loggedIn = result.success ? result.isLoggedIn : false;
+      setIsLoggedIn(loggedIn);
+      return loggedIn;
     } catch (err) {
       setError((err as Error).message);
       return false;
     }
+  }, [electron, activeProfileId]);
+
+  // ============================================
+  // PROFILE SELECTION & LOGIN
+  // ============================================
+
+  const selectProfile = useCallback(async (platform: 'linkedin' | 'twitter' | 'generic') => {
+    if (!electron) return null;
+
+    setIsLoading(true);
+    try {
+      const result = await electron.invoke('playwright:get-or-create-profile', platform);
+      if (result.success) {
+        setActiveProfileId(result.profile.id);
+        setIsLoggedIn(result.profile.isLoggedIn);
+        
+        // Start streaming for live view
+        await electron.invoke('playwright:start-streaming', result.profile.id);
+        
+        return result.profile;
+      } else {
+        setError(result.error);
+        return null;
+      }
+    } catch (err) {
+      setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
   }, [electron]);
+
+  const openLoginPage = useCallback(async (platform: 'linkedin' | 'twitter') => {
+    if (!electron) return;
+    
+    // Get or create profile first, then use its ID
+    const profile = await getOrCreateProfile(platform);
+    if (!profile) return;
+    
+    const profileId = profile.id;
+
+    setIsLoading(true);
+    try {
+      if (platform === 'linkedin') {
+        await electron.invoke('playwright:linkedin-navigate', profileId);
+      } else {
+        await electron.invoke('playwright:navigate', profileId, 'https://twitter.com/login');
+        await electron.invoke('playwright:start-streaming', profileId);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [electron, getOrCreateProfile]);
 
   const twitterFollow = useCallback(async (username: string) => {
     if (!electron) return null;
@@ -650,8 +713,14 @@ export function useBrowserAutomation() {
       await initialize();
     }
 
+    // Helper to get current error state (avoids stale closure)
+    const getErrorMessage = (fallback: string) => {
+      // Access error through a fresh reference if available
+      return fallback;
+    };
+
     switch (command.type) {
-      case 'linkedin_connect':
+      case 'linkedin_connect': {
         if (!command.target) {
           return { success: false, message: 'Please specify who to connect with' };
         }
@@ -660,12 +729,17 @@ export function useBrowserAutomation() {
         const connectUrl = command.target.startsWith('http') 
           ? command.target 
           : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
-        const connectRun = await linkedInConnect(connectUrl);
-        return connectRun 
-          ? { success: true, message: `Started connection request to ${command.target}` }
-          : { success: false, message: error || 'Failed to start connection' };
+        try {
+          const connectRun = await linkedInConnect(connectUrl);
+          return connectRun 
+            ? { success: true, message: `Started connection request to ${command.target}` }
+            : { success: false, message: 'Failed to start connection' };
+        } catch (err) {
+          return { success: false, message: (err as Error).message || 'Failed to start connection' };
+        }
+      }
 
-      case 'linkedin_message':
+      case 'linkedin_message': {
         if (!command.target) {
           return { success: false, message: 'Please specify who to message' };
         }
@@ -675,44 +749,64 @@ export function useBrowserAutomation() {
         const messageUrl = command.target.startsWith('http')
           ? command.target
           : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
-        const messageRun = await linkedInMessage(messageUrl, command.message);
-        return messageRun
-          ? { success: true, message: `Started messaging ${command.target}` }
-          : { success: false, message: error || 'Failed to start message' };
+        try {
+          const messageRun = await linkedInMessage(messageUrl, command.message);
+          return messageRun
+            ? { success: true, message: `Started messaging ${command.target}` }
+            : { success: false, message: 'Failed to start message' };
+        } catch (err) {
+          return { success: false, message: (err as Error).message || 'Failed to start message' };
+        }
+      }
 
-      case 'twitter_follow':
+      case 'twitter_follow': {
         if (!command.target) {
           return { success: false, message: 'Please specify who to follow' };
         }
-        const followRun = await twitterFollow(command.target);
-        return followRun
-          ? { success: true, message: `Started following @${command.target}` }
-          : { success: false, message: error || 'Failed to start follow' };
+        try {
+          const followRun = await twitterFollow(command.target);
+          return followRun
+            ? { success: true, message: `Started following @${command.target}` }
+            : { success: false, message: 'Failed to start follow' };
+        } catch (err) {
+          return { success: false, message: (err as Error).message || 'Failed to start follow' };
+        }
+      }
 
-      case 'twitter_dm':
+      case 'twitter_dm': {
         if (!command.target) {
           return { success: false, message: 'Please specify who to DM' };
         }
         if (!command.message) {
           return { success: false, message: 'Please specify what message to send' };
         }
-        const dmRun = await twitterDM(command.target, command.message);
-        return dmRun
-          ? { success: true, message: `Started DM to @${command.target}` }
-          : { success: false, message: error || 'Failed to start DM' };
+        try {
+          const dmRun = await twitterDM(command.target, command.message);
+          return dmRun
+            ? { success: true, message: `Started DM to @${command.target}` }
+            : { success: false, message: 'Failed to start DM' };
+        } catch (err) {
+          return { success: false, message: (err as Error).message || 'Failed to start DM' };
+        }
+      }
 
-      case 'navigate':
+      case 'navigate': {
         if (!command.target) {
           return { success: false, message: 'Please specify where to navigate' };
         }
         const navUrl = command.target.startsWith('http') ? command.target : `https://${command.target}`;
-        await navigate(navUrl, command.platform);
-        return { success: true, message: `Navigating to ${command.target}` };
+        try {
+          await navigate(navUrl, command.platform);
+          return { success: true, message: `Navigating to ${command.target}` };
+        } catch (err) {
+          return { success: false, message: (err as Error).message || 'Failed to navigate' };
+        }
+      }
 
       default:
         return { success: false, message: 'Unknown command type' };
     }
-  }, [isInitialized, initialize, linkedInConnect, linkedInMessage, twitterFollow, twitterDM, navigate, error]);
+  }, [isInitialized, initialize, linkedInConnect, linkedInMessage, twitterFollow, twitterDM, navigate]);
 
   // ============================================
   // RETURN
@@ -722,6 +816,7 @@ export function useBrowserAutomation() {
     // State
     isInitialized,
     isLoading,
+    isLoggedIn,
     profiles,
     activeProfileId,
     currentRun,
@@ -738,6 +833,8 @@ export function useBrowserAutomation() {
     // Profile management
     createProfile,
     getOrCreateProfile,
+    selectProfile,
+    openLoginPage,
 
     // Live view
     startStreaming,
