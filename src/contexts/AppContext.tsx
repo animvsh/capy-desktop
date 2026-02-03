@@ -6,7 +6,7 @@ import { supabase } from '@/integrations/supabase/client';
 // TYPES
 // ============================================
 
-export type PanelType = 'home' | 'dashboard' | 'conversations' | 'linkedin' | 'contacts' | 'meetings' | 'campaigns' | 'settings' | 'admin';
+export type PanelType = 'home' | 'dashboard' | 'conversations' | 'linkedin' | 'twitter' | 'contacts' | 'meetings' | 'campaigns' | 'settings' | 'admin';
 
 // Chat mode types
 export type ChatMode = 'autopilot' | 'ask_before_send' | 'readonly';

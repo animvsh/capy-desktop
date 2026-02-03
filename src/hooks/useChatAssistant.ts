@@ -31,11 +31,13 @@ interface CommandResult {
 
 // Navigation patterns
 const NAVIGATION_PATTERNS: { pattern: RegExp; panel: PanelType }[] = [
-  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(dashboard|home|stats)/i, panel: 'dashboard' },
-  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(conversations?|emails?|inbox|messages?)/i, panel: 'conversations' },
+  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(dashboard|home|stats)/i, panel: 'home' },
+  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(conversations?|emails?|inbox|messages?)/i, panel: 'home' },
   { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(linkedin|li\b)/i, panel: 'linkedin' },
+  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(twitter|x\b)/i, panel: 'twitter' },
   { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(contacts?|people)/i, panel: 'contacts' },
   { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?(meetings?|calendar|schedule)/i, panel: 'meetings' },
+  { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?campaigns?/i, panel: 'campaigns' },
   { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?settings/i, panel: 'settings' },
   { pattern: /\b(go\s+to|show|open|view)\s+(my\s+)?admin/i, panel: 'admin' },
 ];
@@ -365,8 +367,7 @@ export function useChatAssistant() {
       if (command.platform === 'linkedin') {
         setActivePanel('linkedin');
       } else if (command.platform === 'twitter') {
-        // Twitter panel if exists, otherwise stay on current
-        // setActivePanel('twitter');
+        setActivePanel('twitter');
       }
 
       return {

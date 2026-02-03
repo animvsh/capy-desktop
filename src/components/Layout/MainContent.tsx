@@ -20,6 +20,7 @@ import { CreditsDisplay } from '@/components/credits/CreditsDisplay';
 // Lazy load panel components - but keep them mounted once loaded
 const HomePanel = lazy(() => import('@/components/panels/HomePanel'));
 const LinkedInPanel = lazy(() => import('@/components/panels/LinkedInPanel'));
+const TwitterPanel = lazy(() => import('@/components/panels/TwitterPanel'));
 const ContactsPanel = lazy(() => import('@/components/panels/ContactsPanel'));
 const MeetingsPanel = lazy(() => import('@/components/panels/MeetingsPanel'));
 const CampaignsPanel = lazy(() => import('@/components/panels/CampaignsPanel'));
@@ -39,6 +40,7 @@ interface TabConfig {
 const TABS: TabConfig[] = [
   { id: 'home', label: 'Home', icon: 'fa-home' },
   { id: 'linkedin', label: 'LinkedIn', icon: 'fa-linkedin' },
+  { id: 'twitter', label: 'Twitter', icon: 'fa-x-twitter' },
   { id: 'contacts', label: 'Contacts', icon: 'fa-users' },
   { id: 'meetings', label: 'Meetings', icon: 'fa-calendar' },
   { id: 'campaigns', label: 'Campaigns', icon: 'fa-rocket' },
@@ -236,7 +238,7 @@ function MainContentInner({
             >
               <i className={cn(
                 'text-[10px]',
-                tab.id === 'linkedin' ? 'fa-brands' : 'fa-solid',
+                (tab.id === 'linkedin' || tab.id === 'twitter') ? 'fa-brands' : 'fa-solid',
                 tab.icon
               )} />
               <span className="hidden sm:inline">{tab.label}</span>
@@ -253,6 +255,9 @@ function MainContentInner({
           </PanelWrapper>
           <PanelWrapper isActive={activePanel === 'linkedin'} hasBeenVisited={visitedPanels.has('linkedin')}>
             <div className="h-full overflow-auto"><LinkedInPanel /></div>
+          </PanelWrapper>
+          <PanelWrapper isActive={activePanel === 'twitter'} hasBeenVisited={visitedPanels.has('twitter')}>
+            <div className="h-full overflow-auto"><TwitterPanel /></div>
           </PanelWrapper>
           <PanelWrapper isActive={activePanel === 'contacts'} hasBeenVisited={visitedPanels.has('contacts')}>
             <div className="h-full overflow-auto"><ContactsPanel /></div>

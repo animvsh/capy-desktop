@@ -125,7 +125,7 @@ export function useCampaignProgress({
 
     try {
       // Fetch campaign with agents
-      const { data: campaign, error: campaignError } = await supabase
+      const { data: campaign, error: campaignError } = await supabaseUntyped
         .from('campaigns')
         .select(`
           *,
@@ -138,7 +138,7 @@ export function useCampaignProgress({
       if (!campaign || !mountedRef.current) return;
 
       // Fetch latest agent logs for counts
-      const { data: logs } = await supabase
+      const { data: logs } = await supabaseUntyped
         .from('agent_logs')
         .select('*')
         .eq('campaign_id', campaignId)
@@ -295,7 +295,7 @@ export function useActiveCampaigns() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseUntyped
           .from('campaigns')
           .select(`
             *,

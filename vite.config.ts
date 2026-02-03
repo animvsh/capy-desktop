@@ -17,7 +17,30 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron', 'electron-store']
+              external: [
+                'electron',
+                'electron-store',
+                // Playwright and all its internals - cannot be bundled
+                'playwright-core',
+                'playwright',
+                /^playwright-core\/.*/,
+                /^chromium-bidi\/.*/,
+                'chromium-bidi',
+                // Node.js built-ins that playwright uses
+                'child_process',
+                'fs',
+                'path',
+                'os',
+                'net',
+                'http',
+                'https',
+                'stream',
+                'util',
+                'events',
+                'buffer',
+                'url',
+                'crypto',
+              ]
             }
           }
         }

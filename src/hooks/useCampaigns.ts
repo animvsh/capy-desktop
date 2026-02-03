@@ -26,7 +26,7 @@ export function useCampaigns() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data, error } = await supabase
+      const { data, error } = await supabaseUntyped
         .from('campaigns')
         .select(`
           *,
@@ -93,7 +93,7 @@ export function useCampaign(campaignId: string | null) {
     }
 
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseUntyped
         .from('campaigns')
         .select(`
           *,
@@ -116,7 +116,7 @@ export function useCampaign(campaignId: string | null) {
   const fetchEvents = useCallback(async () => {
     if (!campaignId) return;
 
-    const { data } = await supabase
+    const { data } = await supabaseUntyped
       .from('campaign_events')
       .select('*')
       .eq('campaign_id', campaignId)
@@ -163,7 +163,7 @@ export function useCampaign(campaignId: string | null) {
   const pauseCampaign = useCallback(async () => {
     if (!campaignId) return;
     
-    const { error } = await supabase
+    const { error } = await supabaseUntyped
       .from('campaigns')
       .update({ status: 'paused' })
       .eq('id', campaignId);
@@ -178,7 +178,7 @@ export function useCampaign(campaignId: string | null) {
   const resumeCampaign = useCallback(async () => {
     if (!campaignId) return;
     
-    const { error } = await supabase
+    const { error } = await supabaseUntyped
       .from('campaigns')
       .update({ status: 'sending' })
       .eq('id', campaignId);
@@ -193,13 +193,13 @@ export function useCampaign(campaignId: string | null) {
   const stopCampaign = useCallback(async () => {
     if (!campaignId) return;
     
-    const { error } = await supabase
+    const { error } = await supabaseUntyped
       .from('campaigns')
       .update({ status: 'completed', completed_at: new Date().toISOString() })
       .eq('id', campaignId);
 
     if (!error) {
-      await supabase
+      await supabaseUntyped
         .from('campaign_agents')
         .update({ status: 'completed' })
         .eq('campaign_id', campaignId);
@@ -221,7 +221,7 @@ export function useCampaign(campaignId: string | null) {
       require_approval_before_send: false,
     };
     
-    const { error } = await supabase
+    const { error } = await supabaseUntyped
       .from('campaigns')
       .update({ 
         status: 'sending',
@@ -264,7 +264,7 @@ export function useAgentLogs(agentId: string | null) {
     }
 
     const fetchLogs = async () => {
-      const { data } = await supabase
+      const { data } = await supabaseUntyped
         .from('agent_logs')
         .select('*')
         .eq('agent_id', agentId)
