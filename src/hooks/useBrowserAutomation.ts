@@ -90,7 +90,10 @@ export interface DetectedBrowserCommand {
 }
 
 export function detectBrowserCommand(input: string): DetectedBrowserCommand | null {
-  const lower = input.toLowerCase();
+  const lower = input.toLowerCase().trim();
+  
+  // Early return for empty input
+  if (!lower) return null;
   
   // LinkedIn connection patterns
   const linkedinConnectPatterns = [
@@ -103,10 +106,15 @@ export function detectBrowserCommand(input: string): DetectedBrowserCommand | nu
   for (const pattern of linkedinConnectPatterns) {
     const match = input.match(pattern);
     if (match && (lower.includes('linkedin') || lower.includes('connect'))) {
+      const target = match[1]?.trim();
+      // Skip if target is empty or just "on linkedin"
+      if (!target || target.toLowerCase() === 'on linkedin' || target.length < 2) {
+        continue;
+      }
       return {
         type: 'linkedin_connect',
         platform: 'linkedin',
-        target: match[1].trim(),
+        target,
         confidence: 0.9,
       };
     }
@@ -122,50 +130,105 @@ export function detectBrowserCommand(input: string): DetectedBrowserCommand | nu
   for (const pattern of linkedinMessagePatterns) {
     const match = input.match(pattern);
     if (match && lower.includes('linkedin')) {
+      const target = match[1]?.trim();
+      const message = match[2]?.trim()?.replace(/^["'"]|["'"]$/g, ''); // Remove surrounding quotes
+      
+      // Skip if target is empty
+      if (!target || target.length < 2) {
+        continue;
+      }
+      
       return {
         type: 'linkedin_message',
         platform: 'linkedin',
-        target: match[1].trim(),
-        message: match[2]?.trim(),
+        target,
+        message,
         confidence: 0.85,
       };
     }
   }
   
-  // Twitter follow patterns
+  // Twitter follow patterns - more robust with better username extraction
+  // Must start with "follow" or "twitter follow" - anchored patterns
   const twitterFollowPatterns = [
-    /follow\s+@?(.+?)(?:\s+on\s+twitter|\s+on\s+x)?$/i,
-    /twitter\s+follow\s+@?(.+)/i,
+    // "follow @user on twitter" or "follow @user on x"
+    /^follow\s+@?([a-zA-Z0-9_]{1,15})(?:\s+on\s+(?:twitter|x))?$/i,
+    // "twitter follow @user"
+    /^twitter\s+follow\s+@?([a-zA-Z0-9_]{1,15})$/i,
+    // "follow @user" (without platform)
+    /^follow\s+@([a-zA-Z0-9_]{1,15})$/i,
   ];
   
   for (const pattern of twitterFollowPatterns) {
-    const match = input.match(pattern);
-    if (match && (lower.includes('twitter') || lower.includes('follow') || lower.includes(' x '))) {
+    const match = input.trim().match(pattern);
+    if (match) {
+      const target = match[1]?.trim()?.replace('@', '');
+      // Validate target exists and looks like a username
+      if (!target || target.length < 1 || target.length > 15) {
+        continue;
+      }
+      // Skip if target contains invalid characters or looks like "on twitter"
+      if (/^on\s/i.test(target) || /\s/.test(target)) {
+        continue;
+      }
       return {
         type: 'twitter_follow',
         platform: 'twitter',
-        target: match[1].trim().replace('@', ''),
+        target,
+        confidence: 0.9,
+      };
+    }
+  }
+  
+  // Also support natural "follow X on twitter" where X can have spaces (person names)
+  // But validate it doesn't match "follow on twitter" (empty target)
+  const twitterFollowLoosePattern = /^follow\s+(.+?)\s+on\s+(?:twitter|x)$/i;
+  const looseMatch = input.trim().match(twitterFollowLoosePattern);
+  if (looseMatch) {
+    let target = looseMatch[1]?.trim()?.replace(/^@/, '');
+    if (target && target.length >= 1 && !/^on$/i.test(target)) {
+      return {
+        type: 'twitter_follow',
+        platform: 'twitter',
+        target,
         confidence: 0.85,
       };
     }
   }
   
-  // Twitter DM patterns
+  // Twitter DM patterns - more robust
   const twitterDMPatterns = [
-    /dm\s+@?(.+?)\s+(?:on\s+twitter\s+)?(?:saying|with|:)\s*["""]?(.+)["""]?/i,
-    /send\s+(?:a\s+)?dm\s+to\s+@?(.+?)\s+(?:on\s+twitter\s+)?(?:saying|:)\s*["""]?(.+)["""]?/i,
-    /message\s+@?(.+?)\s+on\s+twitter\s*["""]?(.+)?["""]?/i,
+    // "dm @user on twitter saying message" or "dm @user on x saying message"
+    /^dm\s+@?([a-zA-Z0-9_]{1,15})\s+(?:on\s+(?:twitter|x)\s+)?(?:saying|with|:)\s*["""]?(.+?)["""]?$/i,
+    // "send a dm to @user on twitter saying message"
+    /^send\s+(?:a\s+)?dm\s+to\s+@?([a-zA-Z0-9_]{1,15})\s+(?:on\s+(?:twitter|x)\s+)?(?:saying|with|:)\s*["""]?(.+?)["""]?$/i,
+    // "message @user on twitter saying message"
+    /^message\s+@?([a-zA-Z0-9_]{1,15})\s+on\s+(?:twitter|x)\s+(?:saying|with|:)\s*["""]?(.+?)["""]?$/i,
+    // "message @user on twitter" followed by quoted/unquoted message
+    /^message\s+@?([a-zA-Z0-9_]{1,15})\s+on\s+(?:twitter|x)\s+["""](.+)["""]$/i,
   ];
   
   for (const pattern of twitterDMPatterns) {
-    const match = input.match(pattern);
-    if (match && (lower.includes('twitter') || lower.includes('dm') || lower.includes(' x '))) {
+    const match = input.trim().match(pattern);
+    if (match) {
+      const target = match[1]?.trim()?.replace('@', '');
+      const message = match[2]?.trim()?.replace(/^["'"""]|["'"""]$/g, ''); // Remove surrounding quotes
+      
+      // Validate target
+      if (!target || target.length < 1) {
+        continue;
+      }
+      // Validate message exists
+      if (!message || message.length < 1) {
+        continue;
+      }
+      
       return {
         type: 'twitter_dm',
         platform: 'twitter',
-        target: match[1].trim().replace('@', ''),
-        message: match[2]?.trim(),
-        confidence: 0.85,
+        target,
+        message,
+        confidence: 0.9,
       };
     }
   }
@@ -719,6 +782,19 @@ export function useBrowserAutomation() {
       return fallback;
     };
 
+    // Helper to construct LinkedIn profile URL from a name
+    // Note: LinkedIn profile slugs are typically lowercase, hyphenated, and ASCII
+    // For non-ASCII names, we encode them but LinkedIn may not resolve correctly
+    const toLinkedInSlug = (name: string): string => {
+      // Normalize Unicode characters (e.g., é -> e for better URL compatibility)
+      const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      // Convert to lowercase, replace spaces with hyphens, remove special chars
+      const slug = normalized.toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-]/g, '');
+      return slug;
+    };
+
     switch (command.type) {
       case 'linkedin_connect': {
         if (!command.target) {
@@ -728,7 +804,7 @@ export function useBrowserAutomation() {
         // For now, assume it's a URL or construct one
         const connectUrl = command.target.startsWith('http') 
           ? command.target 
-          : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
+          : `https://www.linkedin.com/in/${toLinkedInSlug(command.target)}`;
         try {
           const connectRun = await linkedInConnect(connectUrl);
           return connectRun 
@@ -748,7 +824,7 @@ export function useBrowserAutomation() {
         }
         const messageUrl = command.target.startsWith('http')
           ? command.target
-          : `https://www.linkedin.com/in/${command.target.toLowerCase().replace(/\s+/g, '-')}`;
+          : `https://www.linkedin.com/in/${toLinkedInSlug(command.target)}`;
         try {
           const messageRun = await linkedInMessage(messageUrl, command.message);
           return messageRun
