@@ -2,71 +2,8 @@
 
 // Browser automation event types
 interface BrowserEvent {
-  type: 'BROWSER_FRAME' | 'RUN_UPDATE' | 'NEEDS_APPROVAL' | 'STEP_COMPLETED' | 'RUN_FINISHED' | 'ERROR';
+  type: 'BROWSER_FRAME' | 'RUN_UPDATE' | 'NEEDS_APPROVAL' | 'STEP_COMPLETED' | 'RUN_FINISHED' | 'STOPPED' | 'ERROR';
   data: any;
-}
-
-// Extend Window interface for Electron IPC
-interface Window {
-  playwright?: {
-    // Lifecycle
-    launch: () => Promise<boolean>;
-    close: () => Promise<void>;
-    getStatus: () => Promise<{ isOpen: boolean }>;
-    
-    // Navigation
-    navigate: (url: string) => Promise<void>;
-    screenshot: () => Promise<string>;
-    
-    // Profile Management
-    getProfiles: () => Promise<BrowserProfile[]>;
-    createProfile: (name: string, platform: 'linkedin' | 'twitter' | 'generic') => Promise<BrowserProfile>;
-    selectProfile: (profileId: string) => Promise<void>;
-    getActiveProfile: () => Promise<BrowserProfile | null>;
-    
-    // Login Management
-    checkLoginStatus: (platform: 'linkedin' | 'twitter') => Promise<{ isLoggedIn: boolean; username?: string }>;
-    openLoginPage: (platform: 'linkedin' | 'twitter') => Promise<void>;
-    
-    // Live View / Streaming
-    startLiveView: () => Promise<void>;
-    stopLiveView: () => Promise<void>;
-    startStreaming: (profileId: string, fps: number) => Promise<void>;
-    stopStreaming: () => Promise<void>;
-    
-    // LinkedIn Actions
-    linkedinConnect: (profileUrl: string, note?: string) => Promise<void>;
-    linkedinMessage: (profileUrl: string, message: string) => Promise<void>;
-    linkedInConnect: (profileUrl: string, note?: string) => Promise<AutomationRun>;
-    linkedInMessage: (profileUrl: string, message: string) => Promise<AutomationRun>;
-    
-    // Twitter Actions
-    twitterFollow: (username: string) => Promise<void>;
-    twitterDM: (username: string, message: string) => Promise<void>;
-    
-    // Run Management
-    getCurrentRun: () => Promise<AutomationRun | null>;
-    approveStep: (runId: string, stepId: string) => Promise<void>;
-    rejectStep: (runId: string, stepId: string) => Promise<void>;
-    approveAction: (runId: string) => Promise<void>;
-    rejectAction: (runId: string) => Promise<void>;
-    pauseRun: (runId: string) => Promise<void>;
-    resumeRun: (runId: string) => Promise<void>;
-    stopRun: (runId?: string) => Promise<void>;
-    
-    // Event Listeners
-    onEvent: (callback: (event: BrowserEvent) => void) => () => void;
-    onLiveViewFrame: (callback: (frame: string) => void) => () => void;
-    onRunProgress: (callback: (run: AutomationRun) => void) => () => void;
-    onApprovalRequired: (callback: (request: ApprovalRequest) => void) => () => void;
-  };
-  
-  store?: {
-    get: (key: string) => Promise<any>;
-    set: (key: string, value: any) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-    clear: () => Promise<void>;
-  };
 }
 
 interface BrowserProfile {
@@ -105,10 +42,69 @@ interface AutomationRun {
 
 interface ApprovalRequest {
   runId: string;
-  stepId: string;
-  stepName: string;
-  description: string;
-  data?: Record<string, any>;
+  action: string;
+  preview: {
+    target: string;
+    content: string;
+  };
+}
+
+// Extend Window interface for Electron IPC
+interface Window {
+  playwright?: {
+    // Lifecycle
+    initialize: () => Promise<{ success: boolean; message?: string; error?: string }>;
+    shutdown: () => Promise<{ success: boolean; error?: string }>;
+
+    // Profile Management
+    getProfiles: () => Promise<BrowserProfile[]>;
+    createProfile: (platform: 'linkedin' | 'twitter' | 'generic', name?: string) => Promise<{ success: boolean; profile?: BrowserProfile; error?: string }>;
+    getOrCreateProfile: (platform: 'linkedin' | 'twitter' | 'generic') => Promise<{ success: boolean; profile?: BrowserProfile; error?: string }>;
+
+    // Live View
+    startStreaming: (profileId: string, fps?: number) => Promise<{ success: boolean; error?: string }>;
+    stopStreaming: () => Promise<{ success: boolean }>;
+    captureFrame: (profileId: string) => Promise<{ success: boolean; frame?: string; error?: string }>;
+
+    // LinkedIn Automation
+    linkedinCheckLogin: (profileId: string) => Promise<{ success: boolean; isLoggedIn?: boolean; error?: string }>;
+    linkedinNavigate: (profileId: string) => Promise<{ success: boolean; error?: string }>;
+    linkedinConnect: (profileId: string, targetUrl: string, note?: string) => Promise<{ success: boolean; run?: AutomationRun; error?: string }>;
+    linkedinMessage: (profileId: string, targetUrl: string, message: string) => Promise<{ success: boolean; run?: AutomationRun; error?: string }>;
+
+    // Twitter Automation
+    twitterCheckLogin: (profileId: string) => Promise<{ success: boolean; isLoggedIn?: boolean; error?: string }>;
+    twitterFollow: (profileId: string, username: string) => Promise<{ success: boolean; run?: AutomationRun; error?: string }>;
+    twitterDM: (profileId: string, username: string, message: string) => Promise<{ success: boolean; run?: AutomationRun; error?: string }>;
+
+    // Run Control
+    approveAction: (runId: string) => Promise<{ success: boolean; error?: string }>;
+    rejectAction: (runId: string) => Promise<{ success: boolean; error?: string }>;
+    stopRun: () => Promise<{ success: boolean }>;
+
+    // Generic Navigation
+    navigate: (profileId: string, url: string) => Promise<{ success: boolean; url?: string; error?: string }>;
+
+    // Event Listeners
+    onEvent: (callback: (event: BrowserEvent) => void) => () => void;
+  };
+
+  electron?: {
+    platform: NodeJS.Platform;
+    invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
+    send: (channel: string, ...args: unknown[]) => void;
+    on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+    once: (channel: string, callback: (...args: unknown[]) => void) => void;
+  };
+
+  electronAPI?: {
+    store: {
+      get: (key: string) => Promise<string | null>;
+      set: (key: string, value: string) => Promise<void>;
+      delete: (key: string) => Promise<void>;
+      clear: () => Promise<void>;
+    };
+  };
 }
 
 export {};
