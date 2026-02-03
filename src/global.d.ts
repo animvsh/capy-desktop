@@ -1,5 +1,11 @@
 // Global type declarations for CapyDesktopApp
 
+// Browser automation event types
+interface BrowserEvent {
+  type: 'BROWSER_FRAME' | 'RUN_UPDATE' | 'NEEDS_APPROVAL' | 'STEP_COMPLETED' | 'RUN_FINISHED' | 'ERROR';
+  data: any;
+}
+
 // Extend Window interface for Electron IPC
 interface Window {
   playwright?: {
@@ -22,13 +28,17 @@ interface Window {
     checkLoginStatus: (platform: 'linkedin' | 'twitter') => Promise<{ isLoggedIn: boolean; username?: string }>;
     openLoginPage: (platform: 'linkedin' | 'twitter') => Promise<void>;
     
-    // Live View
+    // Live View / Streaming
     startLiveView: () => Promise<void>;
     stopLiveView: () => Promise<void>;
+    startStreaming: (profileId: string, fps: number) => Promise<void>;
+    stopStreaming: () => Promise<void>;
     
     // LinkedIn Actions
     linkedinConnect: (profileUrl: string, note?: string) => Promise<void>;
     linkedinMessage: (profileUrl: string, message: string) => Promise<void>;
+    linkedInConnect: (profileUrl: string, note?: string) => Promise<AutomationRun>;
+    linkedInMessage: (profileUrl: string, message: string) => Promise<AutomationRun>;
     
     // Twitter Actions
     twitterFollow: (username: string) => Promise<void>;
@@ -38,11 +48,14 @@ interface Window {
     getCurrentRun: () => Promise<AutomationRun | null>;
     approveStep: (runId: string, stepId: string) => Promise<void>;
     rejectStep: (runId: string, stepId: string) => Promise<void>;
+    approveAction: (runId: string) => Promise<void>;
+    rejectAction: (runId: string) => Promise<void>;
     pauseRun: (runId: string) => Promise<void>;
     resumeRun: (runId: string) => Promise<void>;
-    stopRun: (runId: string) => Promise<void>;
+    stopRun: (runId?: string) => Promise<void>;
     
     // Event Listeners
+    onEvent: (callback: (event: BrowserEvent) => void) => () => void;
     onLiveViewFrame: (callback: (frame: string) => void) => () => void;
     onRunProgress: (callback: (run: AutomationRun) => void) => () => void;
     onApprovalRequired: (callback: (request: ApprovalRequest) => void) => () => void;

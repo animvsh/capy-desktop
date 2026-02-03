@@ -32,8 +32,8 @@ export function LinkedInPanel() {
     selectProfile,
     checkLinkedInLogin,
     openLoginPage,
-    linkedinConnect,
-    linkedinMessage,
+    linkedInConnect,
+    linkedInMessage,
   } = useBrowserAutomation();
 
   const [targetUrl, setTargetUrl] = useState('');
@@ -78,21 +78,21 @@ export function LinkedInPanel() {
   const handleConnect = useCallback(async () => {
     if (!targetUrl) return;
     try {
-      await linkedinConnect(targetUrl, connectionNote || undefined);
+      await linkedInConnect(targetUrl, connectionNote || undefined);
     } catch (e) {
       console.error('Connection failed:', e);
     }
-  }, [targetUrl, connectionNote, linkedinConnect]);
+  }, [targetUrl, connectionNote, linkedInConnect]);
 
   // Send message
   const handleMessage = useCallback(async () => {
     if (!targetUrl || !message) return;
     try {
-      await linkedinMessage(targetUrl, message);
+      await linkedInMessage(targetUrl, message);
     } catch (e) {
       console.error('Message failed:', e);
     }
-  }, [targetUrl, message, linkedinMessage]);
+  }, [targetUrl, message, linkedInMessage]);
 
   // Show web version message if not in Electron
   if (!isElectron) {
