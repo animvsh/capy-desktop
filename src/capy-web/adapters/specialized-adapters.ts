@@ -3,6 +3,7 @@
 // High-signal extraction for specific source types
 // ============================================================================
 
+import type { Page } from 'playwright-core';
 import {
   AdapterType,
   NavigationHeuristic,
@@ -65,7 +66,7 @@ export class CompanySiteAdapter extends BaseAdapter {
     { condition: 'has(location)', adjustment: 0.1, reason: 'Has location' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       const selectors = [
         `a[href*="${target}"]`,
@@ -91,7 +92,7 @@ export class CompanySiteAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -188,7 +189,7 @@ export class PricingAdapter extends BaseAdapter {
     { condition: 'plans.length > 2', adjustment: 0.1, reason: 'Multiple plans found' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       const link = await page.$('a[href*="pricing"], a[href*="plans"], nav a:has-text("Pricing")');
       if (link) {
@@ -202,7 +203,7 @@ export class PricingAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -341,7 +342,7 @@ export class GitHubAdapter extends BaseAdapter {
     { condition: 'topics.length > 0', adjustment: 0.1, reason: 'Has topics' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       // GitHub-specific navigation
       const tabs = ['code', 'issues', 'pulls', 'actions', 'security'];
@@ -359,7 +360,7 @@ export class GitHubAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -454,7 +455,7 @@ export class DocsAdapter extends BaseAdapter {
     { condition: 'code_examples == true', adjustment: 0.1, reason: 'Has code examples' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       const link = await page.$(`a[href*="${target}"], nav a:has-text("${target}")`);
       if (link) {
@@ -468,7 +469,7 @@ export class DocsAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -551,7 +552,7 @@ export class SecurityTrustAdapter extends BaseAdapter {
     { condition: 'has_gdpr == true', adjustment: 0.1, reason: 'GDPR compliant' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       const link = await page.$(`a[href*="${target}"]`);
       if (link) {
@@ -565,7 +566,7 @@ export class SecurityTrustAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -654,12 +655,12 @@ export class NewsAdapter extends BaseAdapter {
     { condition: 'has(author)', adjustment: 0.1, reason: 'Has author' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     // News articles typically don't need internal navigation
     return { success: true, url: await page.url() };
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     
@@ -734,11 +735,11 @@ export class CrunchbaseAdapter extends BaseAdapter {
     { condition: 'has(founded)', adjustment: 0.1, reason: 'Has founding date' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     return { success: true, url: await page.url() };
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     

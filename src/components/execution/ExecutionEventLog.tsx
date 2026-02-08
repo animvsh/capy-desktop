@@ -8,7 +8,7 @@
 import React, { useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useExecution, ExecutionEvent } from './ExecutionContext';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 // ============================================

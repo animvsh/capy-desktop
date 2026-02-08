@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { useCredits } from '@/hooks/useCredits';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import {
   Popover,
   PopoverContent,
@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/Badge';
 import { Progress } from '@/components/ui/progress';
 import { Coins, Plus, Loader2, Zap, TrendingUp, AlertTriangle } from 'lucide-react';
 import { CreditsPurchase } from '@/components/billing/CreditsPurchase';

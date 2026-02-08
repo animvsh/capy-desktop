@@ -12,7 +12,7 @@ import { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase, supabaseUntyped } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 
 interface Stats {

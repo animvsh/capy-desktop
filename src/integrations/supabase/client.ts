@@ -5,19 +5,32 @@ import type { Database } from './types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+// Check if we're in demo mode (placeholder values)
+const isPlaceholder = SUPABASE_URL?.includes('placeholder') || SUPABASE_PUBLISHABLE_KEY?.includes('placeholder');
+
 // Validate required environment variables at startup
 if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-  throw new Error(
-    'Missing Supabase configuration. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are set in your .env file.'
+  console.error(
+    '❌ Missing Supabase configuration. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are set in your .env file.'
+  );
+  // Don't throw - allow app to start with degraded functionality
+}
+
+if (isPlaceholder) {
+  console.warn(
+    '⚠️  Running with placeholder Supabase credentials. Database features will not work. ' +
+    'Please update .env with real values from https://app.supabase.com/project/_/settings/api'
   );
 }
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
+import { storage } from '@/lib/electron-storage';
+
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
-    storage: localStorage,
+    storage: storage,  // Use electron-safe storage instead of localStorage
     persistSession: true,
     autoRefreshToken: true,
   }
@@ -28,7 +41,7 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
 // campaign_agents, agent_logs, sequences, outreach, received_emails
 export const supabaseUntyped = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
-    storage: localStorage,
+    storage: storage,  // Use electron-safe storage instead of localStorage
     persistSession: true,
     autoRefreshToken: true,
   }

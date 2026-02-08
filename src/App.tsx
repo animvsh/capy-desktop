@@ -17,7 +17,7 @@ const USE_NEW_LAYOUT = true;
 const Auth = lazy(() => import("./pages/Auth"));
 
 // New layout (chat sidebar + tabbed panels) - this is the main app
-const NewAppLayout = lazy(() => import("./components/layout/NewAppLayout"));
+const NewAppLayout = lazy(() => import("./components/Layout/NewAppLayout"));
 
 // Support pages
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));

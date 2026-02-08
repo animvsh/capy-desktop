@@ -8,7 +8,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
 import { useExecution, TaskNode, TaskGraph } from './ExecutionContext';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { Progress } from '@/components/ui/progress';
 
 // ============================================

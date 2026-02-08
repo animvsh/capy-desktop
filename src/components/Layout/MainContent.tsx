@@ -2,7 +2,7 @@ import { Suspense, lazy, useState, useEffect, memo } from 'react';
 import { useApp, PanelType } from '@/contexts/AppContext';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,

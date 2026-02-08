@@ -6,8 +6,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useComposio, Email } from '@/hooks/useComposio';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,

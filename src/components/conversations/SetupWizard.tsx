@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useComposio } from '@/hooks/useComposio';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import capyLogo from '@/assets/capy-logo.png';
 

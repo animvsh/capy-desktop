@@ -3,7 +3,7 @@
  */
 
 import { EmailThread, Email } from '@/hooks/useComposio';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';

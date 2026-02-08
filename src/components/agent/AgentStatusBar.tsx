@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAgentStore, AgentState } from '@/stores/agentStore';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 

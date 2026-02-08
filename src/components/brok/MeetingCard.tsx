@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/Button";
 
 type ColorVariant = "terracotta" | "forest" | "sand" | "clay" | "sage" | "rust";
 

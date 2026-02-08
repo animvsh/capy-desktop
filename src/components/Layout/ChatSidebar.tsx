@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useApp } from '@/contexts/AppContext';
 import { ChatPanel } from '@/components/chat/ChatPanel';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import capyLogo from '@/assets/capy-logo.png';
 

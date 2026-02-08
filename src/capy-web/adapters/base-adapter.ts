@@ -3,6 +3,7 @@
 // Foundation for all domain-specific adapters
 // ============================================================================
 
+import type { Page } from 'playwright-core';
 import {
   DomainAdapter,
   AdapterType,
@@ -37,12 +38,12 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Navigate to target on page
    */
-  abstract navigate(page: unknown, target: string): Promise<NavigationResult>;
+  abstract navigate(page: Page, target: string): Promise<NavigationResult>;
   
   /**
    * Extract data from page
    */
-  abstract extract(page: unknown): Promise<ExtractionResult[]>;
+  abstract extract(page: Page): Promise<ExtractionResult[]>;
   
   /**
    * Create an extraction result
@@ -116,7 +117,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Extract text content from page element
    */
-  protected async extractText(page: any, selector: string): Promise<string | null> {
+  protected async extractText(page: Page, selector: string): Promise<string | null> {
     try {
       const element = await page.$(selector);
       if (!element) return null;
@@ -131,7 +132,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Extract multiple text elements
    */
-  protected async extractTextList(page: any, selector: string): Promise<string[]> {
+  protected async extractTextList(page: Page, selector: string): Promise<string[]> {
     try {
       const elements = await page.$$(selector);
       const texts: string[] = [];
@@ -152,7 +153,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Extract attribute from element
    */
-  protected async extractAttribute(page: any, selector: string, attr: string): Promise<string | null> {
+  protected async extractAttribute(page: Page, selector: string, attr: string): Promise<string | null> {
     try {
       const element = await page.$(selector);
       if (!element) return null;
@@ -166,7 +167,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Check if element exists
    */
-  protected async elementExists(page: any, selector: string): Promise<boolean> {
+  protected async elementExists(page: Page, selector: string): Promise<boolean> {
     try {
       const element = await page.$(selector);
       return element !== null;
@@ -178,7 +179,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Get current URL
    */
-  protected async getCurrentUrl(page: any): Promise<string> {
+  protected async getCurrentUrl(page: Page): Promise<string> {
     try {
       return await page.url();
     } catch {
@@ -189,7 +190,7 @@ export abstract class BaseAdapter implements DomainAdapter {
   /**
    * Wait for element
    */
-  protected async waitForElement(page: any, selector: string, timeout = 5000): Promise<boolean> {
+  protected async waitForElement(page: Page, selector: string, timeout = 5000): Promise<boolean> {
     try {
       await page.waitForSelector(selector, { timeout });
       return true;
@@ -240,7 +241,7 @@ export class GenericAdapter extends BaseAdapter {
     { condition: 'headings.length > 3', adjustment: 0.1, reason: 'Has multiple headings' }
   ];
   
-  async navigate(page: any, target: string): Promise<NavigationResult> {
+  async navigate(page: Page, target: string): Promise<NavigationResult> {
     try {
       // Try to find and click a link matching target
       const linkSelector = `a[href*="${target}"], a:has-text("${target}")`;
@@ -269,7 +270,7 @@ export class GenericAdapter extends BaseAdapter {
     }
   }
   
-  async extract(page: any): Promise<ExtractionResult[]> {
+  async extract(page: Page): Promise<ExtractionResult[]> {
     const results: ExtractionResult[] = [];
     const url = await this.getCurrentUrl(page);
     

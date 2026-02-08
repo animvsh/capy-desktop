@@ -21,8 +21,8 @@ import { EmailDetail } from './EmailDetail';
 import { EmailCompose } from './EmailCompose';
 import { SetupWizard } from './SetupWizard';
 import { PendingEmailsQueue } from '@/components/pending/PendingEmailsQueue';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
