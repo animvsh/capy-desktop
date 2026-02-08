@@ -19,6 +19,7 @@ import { BrowserWindow, ipcMain, app } from 'electron'
 import type { Browser, BrowserContext, Page, ChromiumBrowser } from 'playwright-core'
 import { join } from 'path'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
+import { logger } from '../electron/logger'
 
 // Lazy-loaded playwright chromium launcher
 let playwrightChromium: typeof import('playwright-core').chromium | null = null
@@ -116,15 +117,15 @@ function emitEvent(type: string, data: Record<string, any>) {
   try {
     // Triple-check window validity
     if (!mainWindow) {
-      console.warn('[Playwright] Cannot emit event: mainWindow is null')
+      logger.playwright.warn(' Cannot emit event: mainWindow is null')
       return
     }
     if (mainWindow.isDestroyed()) {
-      console.warn('[Playwright] Cannot emit event: mainWindow is destroyed')
+      logger.playwright.warn(' Cannot emit event: mainWindow is destroyed')
       return
     }
     if (!mainWindow.webContents || mainWindow.webContents.isDestroyed()) {
-      console.warn('[Playwright] Cannot emit event: webContents is destroyed')
+      logger.playwright.warn(' Cannot emit event: webContents is destroyed')
       return
     }
     
@@ -134,7 +135,7 @@ function emitEvent(type: string, data: Record<string, any>) {
       data,
     })
   } catch (err) {
-    console.error('[Playwright] Failed to emit event:', err)
+    logger.playwright.error(' Failed to emit event:', err)
   }
 }
 
@@ -145,7 +146,7 @@ function saveProfiles() {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify(profiles, null, 2))
   } catch (err) {
-    console.error('[Playwright] Failed to save profiles:', err)
+    logger.playwright.error(' Failed to save profiles:', err)
   }
 }
 
@@ -303,7 +304,7 @@ async function saveContextState(profile: BrowserProfile): Promise<void> {
     try {
       await context.storageState({ path: statePath })
     } catch (e) {
-      console.error('[Playwright] Failed to save state:', e)
+      logger.playwright.error(' Failed to save state:', e)
     }
   }
 }
@@ -330,7 +331,7 @@ async function captureFrame(profileId: string): Promise<string | null> {
     return `data:image/jpeg;base64,${buffer.toString('base64')}`
   } catch (err) {
     // Page might have closed during screenshot
-    console.warn('[Playwright] Frame capture failed:', err)
+    logger.playwright.warn(' Frame capture failed:', err)
     return null
   }
 }
@@ -583,7 +584,7 @@ async function checkLinkedInLogin(profileId: string): Promise<boolean> {
     
     return isLoggedIn
   } catch (err) {
-    console.error('[Playwright] LinkedIn login check failed:', err)
+    logger.playwright.error(' LinkedIn login check failed:', err)
     return false
   }
 }
@@ -845,7 +846,7 @@ async function checkTwitterLogin(profileId: string): Promise<boolean> {
     
     return isLoggedIn
   } catch (err) {
-    console.error('[Playwright] Twitter login check failed:', err)
+    logger.playwright.error(' Twitter login check failed:', err)
     return false
   }
 }
@@ -1143,7 +1144,7 @@ async function shutdown(): Promise<void> {
     try {
       await browser.close()
     } catch (err) {
-      console.error('[Playwright] Failed to close browser:', err)
+      logger.playwright.error(' Failed to close browser:', err)
     }
     browser = null
   }
@@ -1175,7 +1176,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
       
       // CHAOS FIX: Handle browser disconnection
       browser.on('disconnected', () => {
-        console.warn('[Playwright] Browser disconnected unexpectedly')
+        logger.playwright.warn(' Browser disconnected unexpectedly')
         browser = null
         // Stop all active runs
         stopRun()
@@ -1260,7 +1261,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
       const existingController = pendingNavigations.get(profileId)
       if (existingController) {
         existingController.abort()
-        console.log(`[Playwright] Aborted pending navigation for profile ${profileId}`)
+        logger.playwright.info(` Aborted pending navigation for profile ${profileId}`)
       }
       
       // Create new abort controller for this navigation
@@ -1455,7 +1456,7 @@ export function registerPlaywrightIpcHandlers(window: BrowserWindow) {
 
 export function unregisterPlaywrightIpcHandlers() {
   // Clean up before unregistering
-  shutdown().catch(console.error)
+  shutdown().catch((err) => logger.main.error("Shutdown error", err))
   
   const handlers = [
     'playwright:initialize',

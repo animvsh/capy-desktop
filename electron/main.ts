@@ -3,6 +3,7 @@ import { join } from 'path'
 import Store from 'electron-store'
 import { registerPlaywrightIpcHandlers, unregisterPlaywrightIpcHandlers } from '../electron-extras/playwright-ipc'
 import { registerBrowserIpcHandlers, unregisterBrowserIpcHandlers } from '../electron-extras/ipc-handlers'
+import { logger } from './logger'
 
 const store = new Store()
 
@@ -61,18 +62,18 @@ function createWindow() {
   
   // CHAOS FIX: Handle renderer crashes
   mainWindow.webContents.on('crashed', () => {
-    console.error('[Main] Renderer process crashed')
+    logger.main.error('Renderer process crashed')
     // Clean up automation state
     unregisterPlaywrightIpcHandlers()
   })
   
   // CHAOS FIX: Handle unresponsive renderer
   mainWindow.on('unresponsive', () => {
-    console.warn('[Main] Window became unresponsive')
+    logger.main.warn('Window became unresponsive')
   })
   
   mainWindow.on('responsive', () => {
-    console.log('[Main] Window is responsive again')
+    logger.main.info('Window is responsive again')
   })
 }
 
@@ -120,7 +121,7 @@ app.on('before-quit', () => {
 
 // CHAOS FIX: Handle uncaught exceptions in main process
 process.on('uncaughtException', (error) => {
-  console.error('[Main] Uncaught exception:', error)
+  logger.main.error('Uncaught exception', error)
   // Try to clean up gracefully
   try {
     unregisterPlaywrightIpcHandlers()
@@ -130,5 +131,5 @@ process.on('uncaughtException', (error) => {
 })
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Main] Unhandled rejection at:', promise, 'reason:', reason)
+  logger.main.error('Unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)))
 })
